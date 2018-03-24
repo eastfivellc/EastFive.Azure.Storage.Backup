@@ -1,0 +1,36 @@
+﻿{   
+    "serviceDefaults": {
+        "blob": {
+            "accessPeriod": "01:00:00",
+            "maxConcurrency": 200,
+            "minIntervalCheckCopy": "00:00:01",
+            "maxIntervalCheckCopy": "00:00:15",
+            "maxTotalWaitForCopy": "00:05:00",
+            "copyRetries": 5
+        }
+    },
+    "actions": [
+        {
+            "uniqueId": "765F2D51-91CE-4BB3-BFBF-5566571ED2C3",
+            "tag": "",
+            "sourceConnectionString": "",
+            "services": [
+                "Table",
+                "Blob"
+            ],
+            "recurringSchedule": {
+                "targetConnectionString": "",
+                "daysOfWeek": [
+                    "Sunday",
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday",
+                    "Saturday"
+                ],
+                "timeUtc": "21:00:00"
+            }
+        }
+    ]
+}
