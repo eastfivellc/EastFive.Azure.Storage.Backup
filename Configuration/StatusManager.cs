@@ -43,20 +43,20 @@ namespace EastFive.Azure.Storage.Backup.Configuration
             }
         }
 
-        public void OnWakeUp(Func<ServiceDefaults,BackupAction,Task<string[]>> work)
+        public TResult OnWakeUp<TResult>(Func<TResult> onAlreadyRunning, Func<ServiceDefaults,BackupAction,Func<string[],ActionStatus>,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
         {
             var value = Load();
             var timeOfDay = DateTime.UtcNow.TimeOfDay;
             if (timeOfDay < value.resetAt)
                 value = ResetStatus();
 
-            
-            GetNextAction(
+            if (value.running.Any())
+                return onAlreadyRunning();
+
+            return GetNextAction(
                 value,
-                () => ActionStatus.GetDefault(),
-                action =>
+                (serviceDefaults,action) =>
                 {
-                    EastFiveAzureStorageBackupService.Log.Info($"ready to run {action.uniqueId}");
                     if (!Save((v, save) =>
                         {
                             if (v.running.Contains(action.uniqueId))
@@ -66,23 +66,17 @@ namespace EastFive.Azure.Storage.Backup.Configuration
                         },
                         why => false)
                     )
-                        return ActionStatus.GetDefault();
-
-                    var watch = new Stopwatch();
-                    watch.Start();
-                    return OnActionCompleted(
-                        action.uniqueId,
-                        work(settings.Settings.Value.serviceDefaults, action)
-                            .GetAwaiter()
-                            .GetResult(),
-                        watch.Elapsed);
+                        return onAlreadyRunning();
+                    
+                    return onNext(serviceDefaults, action, 
+                        (errors) => OnActionCompleted(action.uniqueId, errors));
                 },
-                () => ActionStatus.GetDefault());
+                onNothingToDo,
+                onMissingConfiguration);
         }
 
-        private ActionStatus OnActionCompleted(Guid completed, string[] errors, TimeSpan duration)
+        private ActionStatus OnActionCompleted(Guid completed, string[] errors)
         {
-            EastFiveAzureStorageBackupService.Log.Info($"finished work for {completed} in {duration}");
             return Save(
                 (v,save) => save(v.ConcatCompleted(completed, errors)),
                 why => ActionStatus.GetDefault());
@@ -147,13 +141,10 @@ namespace EastFive.Azure.Storage.Backup.Configuration
             }
         }
 
-        private TResult GetNextAction<TResult>(ActionStatus value, Func<TResult> onRunning, Func<BackupAction, TResult> onNext, Func<TResult> onNothing)
+        private TResult GetNextAction<TResult>(ActionStatus value, Func<ServiceDefaults,BackupAction,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
         {
-            if (value.running.Any())
-                return onRunning();
-
             if (!settings.Settings.HasValue)
-                return onNothing();
+                return onMissingConfiguration();
 
             var utcNow = DateTime.UtcNow;
             var dayOfWeek = utcNow.DayOfWeek;
@@ -164,7 +155,7 @@ namespace EastFive.Azure.Storage.Backup.Configuration
                 .OrderBy(a => a.recurringSchedule.timeUtc)
                 .Take(1)
                 .ToArray();
-            return action.Length == 1 ? onNext(action[0]) : onNothing();
+            return action.Length == 1 ? onNext(settings.Settings.Value.serviceDefaults, action[0]) : onNothingToDo();
         }
     }
 }

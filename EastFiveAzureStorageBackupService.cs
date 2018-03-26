@@ -5,6 +5,7 @@ using EastFive.Azure.Storage.Backup.Configuration;
 using log4net.Config;
 using Microsoft.WindowsAzure.Storage;
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -104,13 +105,25 @@ namespace EastFive.Azure.Storage.Backup
             return !timer.Enabled;
         }
 
-        public void OnTimer(object sender, ElapsedEventArgs args)
+        public async void OnTimer(object sender, ElapsedEventArgs args)
         {
             Log.Info("WakeUp");
-            this.manager.OnWakeUp(
-                (defaults, action) => RunServicesAsync(defaults, action, 
-                    () => new string[] { },
-                    errors => errors));
+            var logMessage = await this.manager.OnWakeUp(
+                () => "a backup is running".ToTask(),
+                async (defaults, action, onCompleted) =>
+                {
+                    return await RunServicesAsync(defaults, action,
+                        () => $"no services to run for {action.uniqueId}",
+                        errors =>
+                        {
+                            var value = onCompleted(errors);
+                            var detail = errors.Any() ? errors.Join(",") : "all good";
+                            return $"finished all work for {action.uniqueId}. Detail: {detail}";
+                        });
+                },
+                () => "not yet time to backup".ToTask(),
+                () => "unable to find any backup configuration".ToTask());
+            Log.Info(logMessage);
         }
 
         private async Task<TResult> RunServicesAsync<TResult>(ServiceDefaults defaults, BackupAction action, Func<TResult> onNoServices, Func<string[], TResult> onCompleted)
@@ -126,6 +139,8 @@ namespace EastFive.Azure.Storage.Backup
             if (!CloudStorageAccount.TryParse(action.recurringSchedule.targetConnectionString, out CloudStorageAccount targetAccount))
                 return onCompleted(new[] { $"bad TARGET connection string for {action.uniqueId}" });
 
+            var watch = new Stopwatch();
+            watch.Start();
             var errors = new string[] { };
             // Blobs
             if (action.services.Contains(StorageService.Blob))
@@ -145,6 +160,7 @@ namespace EastFive.Azure.Storage.Backup
                     },
                     why => new[] { why }.ToTask());
                 errors = errors.Concat(err).ToArray();
+                Log.Info($"finished copying blobs for {action.uniqueId} in {watch.Elapsed}");
             }
             return onCompleted(errors);
         }
