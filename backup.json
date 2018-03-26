@@ -11,26 +11,29 @@
     },
     "actions": [
         {
-            "uniqueId": "765F2D51-91CE-4BB3-BFBF-5566571ED2C3",
-            "tag": "",
+            "tag": "my source",
             "sourceConnectionString": "",
             "services": [
                 "Table",
                 "Blob"
             ],
-            "recurringSchedule": {
-                "targetConnectionString": "",
-                "daysOfWeek": [
-                    "Sunday",
-                    "Monday",
-                    "Tuesday",
-                    "Wednesday",
-                    "Thursday",
-                    "Friday",
-                    "Saturday"
-                ],
-                "timeUtc": "21:00:00"
-            }
+            "recurringSchedules": [
+                {
+                    "uniqueId": "F2EEBD42-534E-4028-BAC1-7E0558796268",
+                    "tag": "my backup",
+                    "targetConnectionString": "",
+                    "daysOfWeek": [
+                        "Sunday",
+                        "Monday",
+                        "Tuesday",
+                        "Wednesday",
+                        "Thursday",
+                        "Friday",
+                        "Saturday"
+                    ],
+                    "timeUtc": "21:00:00"
+                }
+            ]
         }
     ]
 }

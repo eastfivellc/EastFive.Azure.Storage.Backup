@@ -1,12 +1,11 @@
-﻿using EastFive.Linq;
+﻿using BlackBarLabs.Extensions;
+using EastFive.Linq;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace EastFive.Azure.Storage.Backup.Configuration
 {
@@ -43,36 +42,53 @@ namespace EastFive.Azure.Storage.Backup.Configuration
             }
         }
 
-        public TResult OnWakeUp<TResult>(Func<TResult> onAlreadyRunning, Func<ServiceDefaults,BackupAction,Func<string[],ActionStatus>,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
+        public TResult OnWakeUp<TResult>(Func<TResult> onAlreadyRunning, Func<ServiceDefaults,BackupAction,RecurringSchedule,Func<string[],ActionStatus>,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
         {
             var value = Load();
             var timeOfDay = DateTime.UtcNow.TimeOfDay;
             if (timeOfDay < value.resetAt)
                 value = ResetStatus();
 
-            if (value.running.Any())
-                return onAlreadyRunning();
-
             return GetNextAction(
                 value,
-                (serviceDefaults,action) =>
+                onAlreadyRunning,
+                (serviceDefaults,action,schedule) =>
                 {
                     if (!Save((v, save) =>
                         {
-                            if (v.running.Contains(action.uniqueId))
+                            if (v.running.Contains(schedule.uniqueId) || v.completed.Contains(schedule.uniqueId))
                                 return false;
-                            save(v.ConcatRunning(action.uniqueId));
+                            save(v.ConcatRunning(schedule.uniqueId));
                             return true;
                         },
                         why => false)
                     )
                         return onAlreadyRunning();
                     
-                    return onNext(serviceDefaults, action, 
-                        (errors) => OnActionCompleted(action.uniqueId, errors));
+                    return onNext(serviceDefaults, action, schedule,
+                        (errors) => OnActionCompleted(schedule.uniqueId, errors));
                 },
                 onNothingToDo,
                 onMissingConfiguration);
+        }
+
+        private TResult GetNextAction<TResult>(ActionStatus value, Func<TResult> onAlreadyRunning, Func<ServiceDefaults,BackupAction,RecurringSchedule,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
+        {
+            if (!settings.Settings.HasValue)
+                return onMissingConfiguration();
+
+            if (value.running.Any())
+                return onAlreadyRunning();
+
+            var utcNow = DateTime.UtcNow;
+            var pair = settings.Settings.Value.actions
+                .SelectMany(a => a.GetActiveSchedules(utcNow)
+                    .Select(s => a.PairWithValue(s)))
+                .OrderBy(pair => pair.Value.timeUtc)
+                .Take(1)
+                .ToArray();
+            
+            return pair.Length == 1 ? onNext(settings.Settings.Value.serviceDefaults, pair[0].Key, pair[0].Value) : onNothingToDo();
         }
 
         private ActionStatus OnActionCompleted(Guid completed, string[] errors)
@@ -139,23 +155,6 @@ namespace EastFive.Azure.Storage.Backup.Configuration
             {
                 mutex.ExitWriteLock();
             }
-        }
-
-        private TResult GetNextAction<TResult>(ActionStatus value, Func<ServiceDefaults,BackupAction,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
-        {
-            if (!settings.Settings.HasValue)
-                return onMissingConfiguration();
-
-            var utcNow = DateTime.UtcNow;
-            var dayOfWeek = utcNow.DayOfWeek;
-            var action = settings.Settings.Value.actions
-                .Where(a => a.recurringSchedule.daysOfWeek.Contains(dayOfWeek) &&
-                    utcNow.TimeOfDay > a.recurringSchedule.timeUtc &&
-                    !value.completed.Contains(a.uniqueId))
-                .OrderBy(a => a.recurringSchedule.timeUtc)
-                .Take(1)
-                .ToArray();
-            return action.Length == 1 ? onNext(settings.Settings.Value.serviceDefaults, action[0]) : onNothingToDo();
         }
     }
 }

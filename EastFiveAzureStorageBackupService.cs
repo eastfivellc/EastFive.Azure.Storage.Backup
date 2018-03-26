@@ -27,6 +27,7 @@ namespace EastFive.Azure.Storage.Backup
         private readonly BackupSettingsLoader loader;
         private readonly FileSystemWatcher watcher;
         private readonly StatusManager manager;
+        private bool fastStart;
 
         static EastFiveAzureStorageBackupService()
         {
@@ -74,8 +75,9 @@ namespace EastFive.Azure.Storage.Backup
         protected override void OnStart(string[] args)
         {
             Log.Info("Service started");
-            timer.Interval = wakeUp.TotalMilliseconds;
-            timer.AutoReset = true;
+            fastStart = true;
+            timer.Interval = TimeSpan.FromSeconds(15).TotalMilliseconds;
+            timer.AutoReset = false;
             timer.Elapsed += OnTimer;
             timer.Start();
         }
@@ -107,18 +109,25 @@ namespace EastFive.Azure.Storage.Backup
 
         public async void OnTimer(object sender, ElapsedEventArgs args)
         {
+            if (fastStart)
+            {
+                fastStart = false;
+                timer.Interval = wakeUp.TotalMilliseconds;
+                timer.AutoReset = true;
+                timer.Start();
+            }
+
             Log.Info("WakeUp");
             var logMessage = await this.manager.OnWakeUp(
                 () => "a backup is running".ToTask(),
-                async (defaults, action, onCompleted) =>
+                async (defaults, action, schedule, onCompleted) =>
                 {
-                    return await RunServicesAsync(defaults, action,
-                        () => $"no services to run for {action.uniqueId}",
+                    return await RunServicesAsync(defaults, action, schedule,
                         errors =>
                         {
                             var value = onCompleted(errors);
                             var detail = errors.Any() ? errors.Join(",") : "all good";
-                            return $"finished all work for {action.uniqueId}. Detail: {detail}";
+                            return $"finished all work for {schedule.tag}. Detail: {detail}";
                         });
                 },
                 () => "not yet time to backup".ToTask(),
@@ -126,18 +135,12 @@ namespace EastFive.Azure.Storage.Backup
             Log.Info(logMessage);
         }
 
-        private async Task<TResult> RunServicesAsync<TResult>(ServiceDefaults defaults, BackupAction action, Func<TResult> onNoServices, Func<string[], TResult> onCompleted)
+        private async Task<TResult> RunServicesAsync<TResult>(ServiceDefaults defaults, BackupAction action, RecurringSchedule schedule, Func<string[], TResult> onCompleted)
         {
-            if (!action.services.Any())
-            {
-                Log.Info($"no services for {action.uniqueId}");
-                return onNoServices();
-            }
-
             if (!CloudStorageAccount.TryParse(action.sourceConnectionString, out CloudStorageAccount sourceAccount))
-                return onCompleted(new[] { $"bad SOURCE connection string for {action.uniqueId}" });
-            if (!CloudStorageAccount.TryParse(action.recurringSchedule.targetConnectionString, out CloudStorageAccount targetAccount))
-                return onCompleted(new[] { $"bad TARGET connection string for {action.uniqueId}" });
+                return onCompleted(new[] { $"bad SOURCE connection string for {action.tag}" });
+            if (!CloudStorageAccount.TryParse(schedule.targetConnectionString, out CloudStorageAccount targetAccount))
+                return onCompleted(new[] { $"bad TARGET connection string for {schedule.tag}" });
 
             var watch = new Stopwatch();
             watch.Start();
@@ -145,7 +148,7 @@ namespace EastFive.Azure.Storage.Backup
             // Blobs
             if (action.services.Contains(StorageService.Blob))
             {
-                Log.Info($"copying blobs for {action.uniqueId}...");
+                Log.Info($"copying blobs for {action.tag}...");
                 var sourceClient = sourceAccount.CreateCloudBlobClient();
                 var targetClient = targetAccount.CreateCloudBlobClient();
                 var err = await await sourceClient.FindAllContainersAsync<Task<string[]>>(
@@ -160,7 +163,7 @@ namespace EastFive.Azure.Storage.Backup
                     },
                     why => new[] { why }.ToTask());
                 errors = errors.Concat(err).ToArray();
-                Log.Info($"finished copying blobs for {action.uniqueId} in {watch.Elapsed}");
+                Log.Info($"finished copying blobs for {action.tag} in {watch.Elapsed}");
             }
             return onCompleted(errors);
         }
