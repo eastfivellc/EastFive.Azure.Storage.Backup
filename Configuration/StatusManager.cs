@@ -81,14 +81,14 @@ namespace EastFive.Azure.Storage.Backup.Configuration
                 return onAlreadyRunning();
 
             var utcNow = DateTime.UtcNow;
-            var pair = settings.Settings.Value.actions
+            var ready = settings.Settings.Value.actions
                 .SelectMany(a => a.GetActiveSchedules(utcNow)
                     .Select(s => a.PairWithValue(s)))
                 .OrderBy(pair => pair.Value.timeUtc)
                 .Take(1)
                 .ToArray();
             
-            return pair.Length == 1 ? onNext(settings.Settings.Value.serviceDefaults, pair[0].Key, pair[0].Value) : onNothingToDo();
+            return ready.Length == 1 ? onNext(settings.Settings.Value.serviceDefaults, ready[0].Key, ready[0].Value) : onNothingToDo();
         }
 
         private ActionStatus OnActionCompleted(Guid completed, string[] errors)
