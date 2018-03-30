@@ -8,13 +8,13 @@ Using the same target account for backups minimizes transactions because after t
 To quickly recover a system where the storage account has become unusable, consider simply changing the connection string to point to the backup. (And, then switch the backup service config so that the target is the new source.)
 
 ## Getting Started
-1. Clone this repo and the prerequisites side by side into a directory.
-2. Build each individually with Visual Studio.  
-3. Edit the configuration file `backup.json`.
-4. Install the service as described below.
+- [] Clone this repo and the prerequisites side by side into a directory.
+- [] Build each individually with Visual Studio.  
+- [] Edit the configuration file `backup.json`.
+- [] Install the service.
 
 ## Prerequisites
-Clone each into a common directory, say c:\backup.
+Clone each into a common directory, say `c:\backup.`
 * [BlackBarLabs.Core](https://github.com/blackbarlabs/BlackBarLabs.Core) - c# helpers
 * [BlackBarLabs.Security](https://github.com/blackbarlabs/BlackBarLabs.Security) - token helpers
 * [BlackBarLabs.Web](https://github.com/blackbarlabs/BlackBarLabs.Web) - config helpers
@@ -30,7 +30,7 @@ Open services.msc, and start **EastFive.Azure.Storage.Backup.Service**
 Note: To uninstall, add the `/u` option.
 
 ## Configuration File 
-[backup.json](https://github.com/eastfivellc/EastFive.Azure.Storage.Backup/blob/master/backup.json) is in the root folder, and once the service is started, a file watcher is used to check it for changes so that you don't have to restart the service.
+[backup.json](backup.json) is in the root folder, and once the service is started, a file watcher is used to check it for changes so that you don't have to restart the service.
 
 These options apply to all table and blob transfers:
 
@@ -70,8 +70,9 @@ Example:
 },
 ```
 
-`actions` is an array of backups where you specify the source and target along with the day of week and time of day for the copy to occur.
+Next, `actions` is an array of backups where you specify the source and target along with the day of week and time of day for the copy to occur.
 
+Example:
 ```
 {
     "tag": "production",
