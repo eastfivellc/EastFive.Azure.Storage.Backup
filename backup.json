@@ -1,8 +1,14 @@
-﻿{   
-    "serviceDefaults": {
+﻿{
+    "serviceSettings": {
+        "table": {
+            "maxTableConcurrency": 5,
+            "maxRowConcurrencyPerTable": 100,
+            "copyRetries": 5
+        },
         "blob": {
             "accessPeriod": "01:00:00",
-            "maxConcurrency": 200,
+            "maxContainerConcurrency": 2,
+            "maxBlobConcurrencyPerContainer": 200,
             "minIntervalCheckCopy": "00:00:01",
             "maxIntervalCheckCopy": "00:00:15",
             "maxTotalWaitForCopy": "00:05:00",
@@ -11,7 +17,7 @@
     },
     "actions": [
         {
-            "tag": "my source",
+            "tag": "production",
             "sourceConnectionString": "",
             "services": [
                 "Table",
@@ -31,7 +37,7 @@
                         "Friday",
                         "Saturday"
                     ],
-                    "timeUtc": "21:00:00"
+                    "timeLocal": "21:00:00"
                 }
             ]
         }

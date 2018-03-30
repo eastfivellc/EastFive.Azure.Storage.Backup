@@ -5,7 +5,7 @@ namespace EastFive.Azure.Storage.Backup.Configuration
 {
     public struct ActionStatus
     {
-        public TimeSpan resetAt;
+        public DateTime resetAtLocal;
         public Guid[] running;
         public Guid[] completed;
         public string[] errors;
@@ -14,7 +14,7 @@ namespace EastFive.Azure.Storage.Backup.Configuration
         {
             return new ActionStatus
             {
-                resetAt = DateTime.UtcNow.TimeOfDay,
+                resetAtLocal = DateTime.Now.Date + TimeSpan.FromDays(1),
                 running = new Guid[] { },
                 completed = new Guid[] { },
                 errors = new string[] { }
@@ -25,7 +25,7 @@ namespace EastFive.Azure.Storage.Backup.Configuration
         {
             return new ActionStatus
             {
-                resetAt = this.resetAt,
+                resetAtLocal = this.resetAtLocal,
                 running = this.running.Concat(new[] { running }).ToArray(),
                 completed = this.completed.Except(new [] { running }).ToArray(),
                 errors = this.errors
@@ -36,10 +36,21 @@ namespace EastFive.Azure.Storage.Backup.Configuration
         {
             return new ActionStatus
             {
-                resetAt = this.resetAt,
+                resetAtLocal = this.resetAtLocal,
                 running = this.running.Except(new[] { completed }).ToArray(),
                 completed = this.completed.Concat(new [] { completed }).ToArray(),
-                errors = this.errors.Concat(errors).ToArray()
+                errors = errors.Any() ? this.errors.Concat(errors).ToArray() : this.errors
+            };
+        }
+
+        public ActionStatus ClearRunning(string[] errors)
+        {
+            return new ActionStatus
+            {
+                resetAtLocal = this.resetAtLocal,
+                running = new Guid[] { },
+                completed = this.completed,
+                errors = errors.Any() ? this.errors.Concat(errors).ToArray() : this.errors
             };
         }
     }

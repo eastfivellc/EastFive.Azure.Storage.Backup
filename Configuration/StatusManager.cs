@@ -20,10 +20,15 @@ namespace EastFive.Azure.Storage.Backup.Configuration
         {
             this.statusPath = Path.Combine(path, "status.json");
             this.settings = settings;
-            this.status = ActionStatus.GetDefault();
+            var value = Load();
+            if (value.running.Any()) // nothing can be running at startup
+                Save((v, save) =>
+                {
+                    v.running = new Guid[] { };
+                    return save(v);
+                },
+                why => value);
 
-            // Initialize since nothing is running when we start up
-            ResetStatus();
         }
 
         public ActionStatus Status
@@ -42,17 +47,16 @@ namespace EastFive.Azure.Storage.Backup.Configuration
             }
         }
 
-        public TResult OnWakeUp<TResult>(Func<TResult> onAlreadyRunning, Func<ServiceDefaults,BackupAction,RecurringSchedule,Func<string[],ActionStatus>,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
+        public TResult OnWakeUp<TResult>(Func<TResult> onAlreadyRunning, Func<ServiceSettings,BackupAction,RecurringSchedule,Func<string[],ActionStatus>,Func<string[],ActionStatus>,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
         {
             var value = Load();
-            var timeOfDay = DateTime.UtcNow.TimeOfDay;
-            if (timeOfDay < value.resetAt)
+            var nowLocal = DateTime.Now;
+            if (nowLocal >= value.resetAtLocal && !value.running.Any())
                 value = ResetStatus();
 
-            return GetNextAction(
-                value,
+            return GetNextAction(nowLocal, value,
                 onAlreadyRunning,
-                (serviceDefaults,action,schedule) =>
+                (serviceSettings,action,schedule) =>
                 {
                     if (!Save((v, save) =>
                         {
@@ -65,14 +69,15 @@ namespace EastFive.Azure.Storage.Backup.Configuration
                     )
                         return onAlreadyRunning();
                     
-                    return onNext(serviceDefaults, action, schedule,
-                        (errors) => OnActionCompleted(schedule.uniqueId, errors));
+                    return onNext(serviceSettings, action, schedule,
+                        (errors) => OnActionCompleted(schedule.uniqueId, errors),
+                        OnActionStopped);
                 },
                 onNothingToDo,
                 onMissingConfiguration);
         }
 
-        private TResult GetNextAction<TResult>(ActionStatus value, Func<TResult> onAlreadyRunning, Func<ServiceDefaults,BackupAction,RecurringSchedule,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
+        private TResult GetNextAction<TResult>(DateTime nowLocal, ActionStatus value, Func<TResult> onAlreadyRunning, Func<ServiceSettings,BackupAction,RecurringSchedule,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
         {
             if (!settings.Settings.HasValue)
                 return onMissingConfiguration();
@@ -80,21 +85,27 @@ namespace EastFive.Azure.Storage.Backup.Configuration
             if (value.running.Any())
                 return onAlreadyRunning();
 
-            var utcNow = DateTime.UtcNow;
             var ready = settings.Settings.Value.actions
-                .SelectMany(a => a.GetActiveSchedules(utcNow)
+                .SelectMany(a => a.GetActiveSchedules(nowLocal)
                     .Select(s => a.PairWithValue(s)))
-                .OrderBy(pair => pair.Value.timeUtc)
+                .Where(pair => !value.completed.Contains(pair.Value.uniqueId))
+                .OrderBy(pair => pair.Value.timeLocal)
                 .Take(1)
                 .ToArray();
-            
-            return ready.Length == 1 ? onNext(settings.Settings.Value.serviceDefaults, ready[0].Key, ready[0].Value) : onNothingToDo();
+            return ready.Length == 1 ? onNext(settings.Settings.Value.serviceSettings, ready[0].Key, ready[0].Value) : onNothingToDo();
         }
 
         private ActionStatus OnActionCompleted(Guid completed, string[] errors)
         {
             return Save(
                 (v,save) => save(v.ConcatCompleted(completed, errors)),
+                why => ActionStatus.GetDefault());
+        }
+
+        private ActionStatus OnActionStopped(string[] errors)
+        {
+            return Save(
+                (v, save) => save(v.ClearRunning(errors)),
                 why => ActionStatus.GetDefault());
         }
 
@@ -114,7 +125,7 @@ namespace EastFive.Azure.Storage.Backup.Configuration
                     update =>
                     {
                         EastFiveAzureStorageBackupService.Log.Info(
-                            $"saving new status, running: {update.running.FirstOrDefault()}, completed: {update.completed.Length}, resetAt: {update.resetAt}");
+                            $"saving new status, running: {update.running.FirstOrDefault()}, completed: {update.completed.Length}, resetAt: {update.resetAtLocal}");
                         File.WriteAllText(statusPath, JsonConvert.SerializeObject(update, Formatting.Indented));
                         status = update;
                         return status;
@@ -136,6 +147,12 @@ namespace EastFive.Azure.Storage.Backup.Configuration
             mutex.EnterWriteLock();
             try
             {
+                if (!File.Exists(statusPath))
+                {
+                    status = ActionStatus.GetDefault();
+                    return status;
+                }
+
                 var text = File.ReadAllText(statusPath);
                 status = JsonConvert.DeserializeObject<ActionStatus>(text, new JsonSerializerSettings()
                 {

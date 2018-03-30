@@ -1,4 +1,5 @@
 ﻿using EastFive.Azure.Storage.Backup.Blob;
+using EastFive.Azure.Storage.Backup.Table;
 using System;
 using System.Linq;
 
@@ -10,11 +11,11 @@ namespace EastFive.Azure.Storage.Backup.Configuration
         public string tag;
         public string targetConnectionString;
         public DayOfWeek[] daysOfWeek;
-        public TimeSpan timeUtc;
+        public TimeSpan timeLocal;
 
-        public bool IsActive(DateTime asOfDate)
+        public bool IsActive(DateTime asOfDateLocal)
         {
-            return daysOfWeek.Contains(asOfDate.DayOfWeek) && asOfDate.TimeOfDay > timeUtc;
+            return daysOfWeek.Contains(asOfDateLocal.DayOfWeek) && asOfDateLocal.TimeOfDay > timeLocal;
         }
     }
 
@@ -25,25 +26,30 @@ namespace EastFive.Azure.Storage.Backup.Configuration
         public StorageService[] services;
         public RecurringSchedule[] recurringSchedules;
 
-        public RecurringSchedule[] GetActiveSchedules(DateTime asOfDate)
+        public RecurringSchedule[] GetActiveSchedules(DateTime asOfDateLocal)
         {
             if (!services.Any())
                 return new RecurringSchedule[] { };
 
             return recurringSchedules
-                .Where(x => x.IsActive(asOfDate))
+                .Where(x => x.IsActive(asOfDateLocal))
                 .ToArray();
         }
     }
 
-    public struct ServiceDefaults
+    public struct ServiceSettings
     {
+        public static readonly TimeSpan defaultBackoff = TimeSpan.FromSeconds(4);
+        public const int defaultMaxAttempts = 10;
+        public static readonly TimeSpan defaultRequestTimeout = TimeSpan.FromSeconds(90);
+
+        public TableCopyOptions table;
         public BlobCopyOptions blob;
     }
 
     public struct BackupSettings
     {
-        public ServiceDefaults serviceDefaults;
+        public ServiceSettings serviceSettings;
         public BackupAction[] actions;
     }
 }

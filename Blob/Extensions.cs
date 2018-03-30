@@ -5,9 +5,9 @@ using System.Net;
 using System.Threading.Tasks;
 using BlackBarLabs;
 using BlackBarLabs.Extensions;
+using EastFive.Azure.Storage.Backup.Configuration;
 using Microsoft.WindowsAzure.Storage;
 using Microsoft.WindowsAzure.Storage.Blob;
-using Microsoft.WindowsAzure.Storage.RetryPolicies;
 
 namespace EastFive.Azure.Storage.Backup.Blob
 {
@@ -22,28 +22,15 @@ namespace EastFive.Azure.Storage.Backup.Blob
 
         private struct SparseCloudBlob
         {
-            public string name;
             public string contentMD5;
             public long length;
         }
 
-        private static readonly BlobRequestOptions RetryOptions =
-            new BlobRequestOptions
-            {
-                ServerTimeout = TimeSpan.FromSeconds(90),
-                RetryPolicy = new ExponentialRetry(TimeSpan.FromSeconds(4), 10)
-            };
-
         private static readonly AccessCondition EmptyCondition = AccessCondition.GenerateEmptyCondition();
-
-        private static OperationContext CreateContext()
-        {
-            return new OperationContext();
-        }
 
         public static async Task<TResult> FindAllContainersAsync<TResult>(this CloudBlobClient sourceClient, Func<CloudBlobContainer[], TResult> onSuccess, Func<string,TResult> onFailure)
         {
-            var context = CreateContext();
+            var context = new OperationContext();
             BlobContinuationToken token = null;
             var containers = new List<CloudBlobContainer>();
             while (true)
@@ -51,7 +38,7 @@ namespace EastFive.Azure.Storage.Backup.Blob
                 try
                 {
                     var segment = await sourceClient.ListContainersSegmentedAsync(null, ContainerListingDetails.All, 
-                        null, token, RetryOptions, context);
+                        null, token, BlobCopyOptions.requestOptions, context);
                     var results = segment.Results.ToArray();
                     containers.AddRange(results);
                     token = segment.ContinuationToken;
@@ -68,9 +55,13 @@ namespace EastFive.Azure.Storage.Backup.Blob
         public static async Task<KeyValuePair<string, BlobTransferStatistics>> CopyContainerAsync(this CloudBlobContainer sourceContainer, CloudBlobClient targetClient, BlobCopyOptions copyOptions, Func<bool> stopCalled)
         {
             var targetContainerName = sourceContainer.Name;
-            return await await sourceContainer.CreateOrUpdateTargetContainerForCopyAsync(targetClient, targetContainerName, stopCalled,
+            if (stopCalled())
+                return sourceContainer.Name.PairWithValue(BlobTransferStatistics.Default.Concat(new[] { $"copy stopped on {targetContainerName}" }));
+
+            return await await sourceContainer.CreateIfNotExistTargetContainerForCopyAsync(targetClient, targetContainerName, stopCalled,
                 async (targetContainer, findExistingAsync, renewAccessAsync, releaseAccessAsync) =>
                 {
+                    EastFiveAzureStorageBackupService.Log.Info($"starting {targetContainerName}");
                     try
                     {
                         var existingTargetBlobs = await findExistingAsync();
@@ -89,37 +80,42 @@ namespace EastFive.Azure.Storage.Backup.Blob
                         while (true)
                         {
                             if (stopCalled())
-                                return sourceContainer.Name.PairWithValue(pair.Value);
+                                return sourceContainer.Name.PairWithValue(pair.Value.Concat(new[] { $"copy stopped on {sourceContainer.Name}" }));
 
                             pair = await await sourceContainer.FindNextBlobSegmentAsync<Task<KeyValuePair<BlobContinuationToken,BlobTransferStatistics>>>(pair.Key,
                                 async (token, blobs) =>
                                 {
                                     var stats = await blobs.CopyBlobsWithContainerKeyAsync(targetContainer, existingTargetBlobs.Value, 
                                         () => pair.Value.calc.GetNextInterval(copyOptions.minIntervalCheckCopy, copyOptions.maxIntervalCheckCopy), 
-                                        copyOptions.maxTotalWaitForCopy, renewWhenExpiredAsync, copyOptions.maxConcurrency);
+                                        copyOptions.maxTotalWaitForCopy, renewWhenExpiredAsync, copyOptions.maxBlobConcurrencyPerContainer, stopCalled);
                                     blobs = null;
                                     return token.PairWithValue(pair.Value.Concat(stats));
                                 },
                                 why => default(BlobContinuationToken).PairWithValue(pair.Value.Concat(new[] { why })).ToTask());
+                            pair.Value.LogProgress(copyOptions.minIntervalCheckCopy, copyOptions.maxIntervalCheckCopy,
+                                msg => EastFiveAzureStorageBackupService.Log.Info($"(progress) {targetContainerName} -> {msg}"));
+
                             if (default(BlobContinuationToken) == pair.Key)
                             {
                                 if (pair.Value.retries.Any())
                                 {
                                     var copyRetries = copyOptions.copyRetries;
                                     existingTargetBlobs = await findExistingAsync();
-                                    pair = default(BlobContinuationToken).PairWithValue(pair.Value.Concat(existingTargetBlobs.Key));
+                                    pair = default(BlobContinuationToken).PairWithValue(pair.Value.Concat(existingTargetBlobs.Key)); // just copies errors
                                     var checkCopyCompleteAfter = pair.Value.calc.GetNextInterval(copyOptions.minIntervalCheckCopy, copyOptions.maxIntervalCheckCopy);
                                     while (copyRetries-- > 0)
                                     {
                                         if (stopCalled())
+                                        {
+                                            pair = default(BlobContinuationToken).PairWithValue(pair.Value.Concat(new[] { $"copy stopped on {sourceContainer.Name}" }));
                                             break;
-
+                                        }
                                         var stats = await pair.Value.retries
                                             .Select(x => x.Key)
                                             .ToArray()
                                             .CopyBlobsWithContainerKeyAsync(targetContainer, existingTargetBlobs.Value, 
                                                 () => pair.Value.calc.GetNextInterval(copyOptions.minIntervalCheckCopy, copyOptions.maxIntervalCheckCopy), 
-                                                copyOptions.maxTotalWaitForCopy, renewWhenExpiredAsync, copyOptions.maxConcurrency);
+                                                copyOptions.maxTotalWaitForCopy, renewWhenExpiredAsync, copyOptions.maxBlobConcurrencyPerContainer, stopCalled);
                                         pair = default(BlobContinuationToken).PairWithValue(new BlobTransferStatistics
                                         {
                                             calc = pair.Value.calc.Concat(stats.calc),
@@ -132,6 +128,9 @@ namespace EastFive.Azure.Storage.Backup.Blob
                                             break;
                                     }
                                 }
+                                pair.Value.LogProgress(copyOptions.minIntervalCheckCopy, copyOptions.maxIntervalCheckCopy,
+                                    msg => EastFiveAzureStorageBackupService.Log.Info($"finished {targetContainerName} -> {msg}"),
+                                    BlobTransferStatistics.logFrequency);
                                 return sourceContainer.Name.PairWithValue(pair.Value);
                             }
                         }
@@ -143,24 +142,25 @@ namespace EastFive.Azure.Storage.Backup.Blob
                     finally
                     {
                         await releaseAccessAsync();
+                        EastFiveAzureStorageBackupService.Log.Info($"done with {targetContainerName}");
                     }
                 },
                 why => sourceContainer.Name.PairWithValue(BlobTransferStatistics.Default.Concat(new[] { why })).ToTask());
         }
 
-        private static async Task<TResult> CreateOrUpdateTargetContainerForCopyAsync<TResult>(this CloudBlobContainer sourceContainer,
-           CloudBlobClient blobClient, string targetContainerName, Func<bool> stopCalled,
-           Func<CloudBlobContainer, Func<Task<KeyValuePair<string[],SparseCloudBlob[]>>>, Func<TimeSpan, Task<BlobAccess>>, Func<Task>, TResult> onSuccess, Func<string,TResult> onFailure)
+        private static async Task<TResult> CreateIfNotExistTargetContainerForCopyAsync<TResult>(this CloudBlobContainer sourceContainer,
+           CloudBlobClient targetClient, string targetContainerName, Func<bool> stopCalled,
+           Func<CloudBlobContainer, Func<Task<KeyValuePair<string[],IDictionary<string, SparseCloudBlob>>>>, Func<TimeSpan, Task<BlobAccess>>, Func<Task>, TResult> onSuccess, Func<string,TResult> onFailure)
         {
             try
             {
-                var targetContainer = blobClient.GetContainerReference(targetContainerName);
-                var context = CreateContext();
-                var exists = await targetContainer.ExistsAsync(RetryOptions, context);
+                var targetContainer = targetClient.GetContainerReference(targetContainerName);
+                var context = new OperationContext();
+                var exists = await targetContainer.ExistsAsync(BlobCopyOptions.requestOptions, context);
                 if (!exists)
                 {
-                    var createPermissions = await sourceContainer.GetPermissionsAsync(EmptyCondition, RetryOptions, context);
-                    await targetContainer.CreateAsync(createPermissions.PublicAccess, RetryOptions, context);
+                    var createPermissions = await sourceContainer.GetPermissionsAsync(EmptyCondition, BlobCopyOptions.requestOptions, context);
+                    await targetContainer.CreateAsync(createPermissions.PublicAccess, BlobCopyOptions.requestOptions, context);
 
                     var metadataModified = false;
                     foreach (var item in sourceContainer.Metadata)
@@ -172,7 +172,7 @@ namespace EastFive.Azure.Storage.Backup.Blob
                         }
                     }
                     if (metadataModified)
-                        await targetContainer.SetMetadataAsync(EmptyCondition, RetryOptions, context);
+                        await targetContainer.SetMetadataAsync(EmptyCondition, BlobCopyOptions.requestOptions, context);
                 }
                 var keyName = $"{sourceContainer.ServiceClient.Credentials.AccountName}-{targetContainerName}-access";
                 return onSuccess(targetContainer,
@@ -186,8 +186,8 @@ namespace EastFive.Azure.Storage.Backup.Blob
                     {
                         try
                         {
-                            var renewContext = CreateContext();
-                            var permissions = await sourceContainer.GetPermissionsAsync(EmptyCondition, RetryOptions, renewContext);
+                            var renewContext = new OperationContext();
+                            var permissions = await sourceContainer.GetPermissionsAsync(EmptyCondition, BlobCopyOptions.requestOptions, renewContext);
                             permissions.SharedAccessPolicies.Clear();
                             var access = new BlobAccess
                             {
@@ -199,7 +199,7 @@ namespace EastFive.Azure.Storage.Backup.Blob
                                 SharedAccessExpiryTime = access.expiresUtc,
                                 Permissions = SharedAccessBlobPermissions.Read
                             });
-                            await sourceContainer.SetPermissionsAsync(permissions, EmptyCondition, RetryOptions, renewContext);
+                            await sourceContainer.SetPermissionsAsync(permissions, EmptyCondition, BlobCopyOptions.requestOptions, renewContext);
                             return access;
                         }
                         catch (Exception e)
@@ -211,10 +211,10 @@ namespace EastFive.Azure.Storage.Backup.Blob
                     {
                         try
                         {
-                            var releaseContext = CreateContext();
-                            var permissions = await sourceContainer.GetPermissionsAsync(EmptyCondition, RetryOptions, releaseContext);
+                            var releaseContext = new OperationContext();
+                            var permissions = await sourceContainer.GetPermissionsAsync(EmptyCondition, BlobCopyOptions.requestOptions, releaseContext);
                             permissions.SharedAccessPolicies.Clear();
-                            await sourceContainer.SetPermissionsAsync(permissions, EmptyCondition, RetryOptions, releaseContext);
+                            await sourceContainer.SetPermissionsAsync(permissions, EmptyCondition, BlobCopyOptions.requestOptions, releaseContext);
                         }
                         catch (Exception e)
                         {
@@ -229,58 +229,72 @@ namespace EastFive.Azure.Storage.Backup.Blob
             }
         }
 
-        private static async Task<TResult> FindAllBlobsAsync<TResult>(this CloudBlobContainer container, Func<bool> stopCalled, Func<SparseCloudBlob[], TResult> onSuccess, Func<string, SparseCloudBlob[], TResult> onFailure)
+        private static async Task<TResult> FindAllBlobsAsync<TResult>(this CloudBlobContainer targetContainer, Func<bool> stopCalled, Func<IDictionary<string,SparseCloudBlob>, TResult> onSuccess, Func<string, IDictionary<string, SparseCloudBlob>, TResult> onFailure)
         {
-            var context = CreateContext();
+            var context = new OperationContext();
             BlobContinuationToken token = null;
-            var blobs = new List<SparseCloudBlob>();
+            var dict = new Dictionary<string,SparseCloudBlob>(5000);
+            var retryTimes = ServiceSettings.defaultMaxAttempts;
             while (true)
             {
                 try
                 {
                     if (stopCalled())
-                        return onSuccess(blobs.ToArray());
+                        return onFailure($"copy stopped on {targetContainer.Name}", dict);
 
-                    var segment = await container.ListBlobsSegmentedAsync(null, true,
-                        BlobListingDetails.UncommittedBlobs, null, token, RetryOptions, context);
-                    var results = segment.Results.ToArray();
-                    blobs.AddRange(results
-                        .Cast<CloudBlob>()
-                        .Select(x => new SparseCloudBlob
+                    var segment = await targetContainer.ListBlobsSegmentedAsync(null, true,
+                        BlobListingDetails.UncommittedBlobs, null, token, BlobCopyOptions.requestOptions, context);
+                    foreach (CloudBlob blob in segment.Results)
+                    {
+                        dict[blob.Name] = new SparseCloudBlob
                         {
-                            name = x.Name,
-                            contentMD5 = x.Properties.ContentMD5,
-                            length = x.Properties.Length
-                        }));
+                            contentMD5 = blob.Properties.ContentMD5,
+                            length = blob.Properties.Length
+                        };
+                    }
                     token = segment.ContinuationToken;
                     if (null == token)
-                        return onSuccess(blobs.ToArray());
+                        return onSuccess(dict);
                 }
                 catch (Exception e)
                 {
-                    return onFailure($"Exception listing all blobs, Detail: {e.Message}", blobs.ToArray());
+                    if (e.Message.Contains("could not finish the operation within specified timeout") && --retryTimes > 0)
+                    {
+                        await Task.Delay(ServiceSettings.defaultBackoff);
+                        continue;
+                    }
+                    return onFailure($"Exception listing all blobs, Detail: {e.Message}", dict);
                 }
             }
         }
 
-        private static async Task<TResult> FindNextBlobSegmentAsync<TResult>(this CloudBlobContainer container, BlobContinuationToken token, Func<BlobContinuationToken, CloudBlob[], TResult> onSuccess, Func<string,TResult> onFailure)
+        private static async Task<TResult> FindNextBlobSegmentAsync<TResult>(this CloudBlobContainer sourceContainer, BlobContinuationToken token, Func<BlobContinuationToken, CloudBlob[], TResult> onSuccess, Func<string,TResult> onFailure)
         {
-            var context = CreateContext();
-            try
+            var context = new OperationContext();
+            var retryTimes = ServiceSettings.defaultMaxAttempts;
+            while (true)
             {
-                var segment = await container.ListBlobsSegmentedAsync(null, true,
-                    BlobListingDetails.UncommittedBlobs, null, token, RetryOptions, context);
-                var results = segment.Results.Cast<CloudBlob>().ToArray();
-                token = segment.ContinuationToken;
-                return onSuccess(token, results);
-            }
-            catch (Exception e)
-            {
-                return onFailure($"Exception listing next blob segment, Detail: {e.Message}");
+                try
+                {
+                    var segment = await sourceContainer.ListBlobsSegmentedAsync(null, true,
+                        BlobListingDetails.UncommittedBlobs, null, token, BlobCopyOptions.requestOptions, context);
+                    var results = segment.Results.Cast<CloudBlob>().ToArray();
+                    token = segment.ContinuationToken;
+                    return onSuccess(token, results);
+                }
+                catch (Exception e)
+                {
+                    if (e.Message.Contains("could not finish the operation within specified timeout") && --retryTimes > 0)
+                    {
+                        await Task.Delay(ServiceSettings.defaultBackoff);
+                        continue;
+                    }
+                    return onFailure($"Exception listing next blob segment, Detail: {e.Message}");
+                }
             }
         }
 
-        private static async Task<BlobTransferStatistics> CopyBlobsWithContainerKeyAsync(this CloudBlob[] sourceBlobs, CloudBlobContainer targetContainer, SparseCloudBlob[] existingTargetBlobs, Func<TimeSpan> getCheckInterval, TimeSpan maxTotalWaitForCopy, Func<Task<BlobAccess>> renewAccessAsync, int maxConcurrency)
+        private static async Task<BlobTransferStatistics> CopyBlobsWithContainerKeyAsync(this CloudBlob[] sourceBlobs, CloudBlobContainer targetContainer, IDictionary<string, SparseCloudBlob> existingTargetBlobs, Func<TimeSpan> getCheckInterval, TimeSpan maxTotalWaitForCopy, Func<Task<BlobAccess>> renewAccessAsync, int maxConcurrency, Func<bool> stopCalled)
         {
             var access = await renewAccessAsync();
             if (!string.IsNullOrEmpty(access.error))
@@ -289,7 +303,7 @@ namespace EastFive.Azure.Storage.Backup.Blob
             }
             var checkInterval = getCheckInterval();
             var items = await sourceBlobs
-                .Select(blob => blob.StartCopyAndWaitForCompletionAsync(targetContainer, access.key, existingTargetBlobs, checkInterval, maxTotalWaitForCopy))
+                .Select(blob => blob.StartCopyAndWaitForCompletionAsync(targetContainer, access.key, existingTargetBlobs, checkInterval, maxTotalWaitForCopy, stopCalled))
                 .WhenAllAsync(maxConcurrency);
 
             return new BlobTransferStatistics
@@ -302,20 +316,20 @@ namespace EastFive.Azure.Storage.Backup.Blob
             };
         }
 
-        private static async Task<Tuple<CloudBlob,TransferStatus,int>> StartCopyAndWaitForCompletionAsync(this CloudBlob sourceBlob, CloudBlobContainer targetContainer, string accessKey, SparseCloudBlob[] existingTargetBlobs, TimeSpan checkInterval, TimeSpan maxTotalWaitForCopy)
+        private static async Task<Tuple<CloudBlob,TransferStatus,int>> StartCopyAndWaitForCompletionAsync(this CloudBlob sourceBlob, CloudBlobContainer targetContainer, string accessKey, IDictionary<string, SparseCloudBlob> existingTargetBlobs, TimeSpan checkInterval, TimeSpan maxTotalWaitForCopy, Func<bool> stopCalled)
         {
             return await await sourceBlob.StartBackgroundCopyAsync(targetContainer, accessKey, existingTargetBlobs,
                 async (started, progressAsync) =>
                 {
                     try
                     {
-                        var waitUntil = DateTime.UtcNow + maxTotalWaitForCopy;
+                        var waitUntilLocal = DateTime.Now + maxTotalWaitForCopy;
                         var cycles = 0;
                         while (true)
                         {
                             if (started)
                             {
-                                if (waitUntil < DateTime.UtcNow)
+                                if (waitUntilLocal < DateTime.Now || stopCalled())
                                     return new Tuple<CloudBlob,TransferStatus,int>(sourceBlob,TransferStatus.ShouldRetry,cycles);
                                 await Task.Delay(checkInterval);
                                 cycles++;
@@ -339,26 +353,27 @@ namespace EastFive.Azure.Storage.Backup.Blob
                 });
         }
 
-        private static async Task<TResult> StartBackgroundCopyAsync<TResult>(this CloudBlob sourceBlob, CloudBlobContainer targetContainer, string accessKey, SparseCloudBlob[] existingTargetBlobs,
+        private static async Task<TResult> StartBackgroundCopyAsync<TResult>(this CloudBlob sourceBlob, CloudBlobContainer targetContainer, string accessKey, IDictionary<string, SparseCloudBlob> existingTargetBlobs,
             Func<bool, Func<Task<TransferStatus>>, TResult> onSuccess) // started, progressAsync
         {
             var started = true;
             var notStarted = !started;
-            var existingTarget = existingTargetBlobs.FirstOrDefault(tb => tb.name == sourceBlob.Name);
-            if (!string.IsNullOrEmpty(existingTarget.name) && 
-                existingTarget.contentMD5 == sourceBlob.Properties.ContentMD5 && 
+            if (existingTargetBlobs.TryGetValue(sourceBlob.Name, out SparseCloudBlob existingTarget) &&
+                existingTarget.contentMD5 == sourceBlob.Properties.ContentMD5 &&
                 existingTarget.length == sourceBlob.Properties.Length)
+            {
                 return onSuccess(notStarted, () => TransferStatus.CopySuccessful.ToTask());
+            }
 
             var target = targetContainer.GetReference(sourceBlob.BlobType, sourceBlob.Name);
             var sas = sourceBlob.GetSharedAccessSignature(null, accessKey);
             try
             {
-                await target.StartCopyAsync(new Uri(sourceBlob.Uri + sas), EmptyCondition, EmptyCondition, RetryOptions, CreateContext());
+                await target.StartCopyAsync(new Uri(sourceBlob.Uri + sas), EmptyCondition, EmptyCondition, BlobCopyOptions.requestOptions, new OperationContext());
                 return onSuccess(started,
                     async () =>
                     {
-                        var blob = (await targetContainer.GetBlobReferenceFromServerAsync(sourceBlob.Name, AccessCondition.GenerateEmptyCondition(), RetryOptions, CreateContext())) as CloudBlob;
+                        var blob = (await targetContainer.GetBlobReferenceFromServerAsync(sourceBlob.Name, AccessCondition.GenerateEmptyCondition(), BlobCopyOptions.requestOptions, new OperationContext())) as CloudBlob;
                         var copyStatus = blob.CopyState?.Status ?? CopyStatus.Invalid;
                         if (CopyStatus.Success == copyStatus)
                             return TransferStatus.CopySuccessful;
