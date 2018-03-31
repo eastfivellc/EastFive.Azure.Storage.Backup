@@ -28,7 +28,6 @@ namespace EastFive.Azure.Storage.Backup.Configuration
                     return save(v);
                 },
                 why => value);
-
         }
 
         public ActionStatus Status
@@ -47,7 +46,7 @@ namespace EastFive.Azure.Storage.Backup.Configuration
             }
         }
 
-        public TResult OnWakeUp<TResult>(Func<TResult> onAlreadyRunning, Func<ServiceSettings,BackupAction,RecurringSchedule,Func<string[],ActionStatus>,Func<string[],ActionStatus>,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
+        public TResult CheckForWork<TResult>(Func<TResult> onAlreadyRunning, Func<ServiceSettings,BackupAction,RecurringSchedule,Func<string[],ActionStatus>,Func<string[],ActionStatus>,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
         {
             var value = Load();
             var nowLocal = DateTime.Now;

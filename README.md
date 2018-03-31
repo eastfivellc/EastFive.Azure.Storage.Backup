@@ -8,10 +8,10 @@ Using the same target account for backups minimizes transactions because after t
 To quickly recover a system where the storage account has become unusable, consider simply changing the connection string to point to the backup. (And, then switch the backup service config so that the target is the new source.)
 
 ## Getting Started
-- [] Clone this repo and the prerequisites side by side into a directory.
-- [] Build each individually with Visual Studio.  
-- [] Edit the configuration file `backup.json`.
-- [] Install the service.
+1. Clone this repo and the prerequisites side by side into a directory.
+2. Build each individually with Visual Studio.  
+3. Edit the configuration file `backup.json`.
+4. Install the service.
 
 ## Prerequisites
 Clone each into a common directory, say `c:\backup.`

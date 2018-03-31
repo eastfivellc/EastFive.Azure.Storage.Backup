@@ -6,6 +6,7 @@ using EastFive.Azure.Storage.Backup.Table;
 using log4net.Config;
 using Microsoft.WindowsAzure.Storage;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -27,7 +28,7 @@ namespace EastFive.Azure.Storage.Backup
         private readonly string configFile;
         private readonly BackupSettingsLoader loader;
         private readonly FileSystemWatcher watcher;
-        private readonly StatusManager manager;
+        private readonly StatusManager scheduler;
         private bool fastStart;
 
         static EastFiveAzureStorageBackupService()
@@ -62,7 +63,7 @@ namespace EastFive.Azure.Storage.Backup
                 watcher.EnableRaisingEvents = true;
                 components.Add(watcher);
 
-                this.manager = new StatusManager(dir, this.loader);
+                this.scheduler = new StatusManager(dir, this.loader);
 
                 timer = new System.Timers.Timer();
                 components.Add(timer);
@@ -92,13 +93,13 @@ namespace EastFive.Azure.Storage.Backup
             Log.Info("Service stopping...");
 
             timer.Stop();
-            if (manager.Status.running.Any())
+            if (scheduler.Status.running.Any())
             {
                 var maxWaitLocal = DateTime.Now + TimeSpan.FromMinutes(5);
                 do
                 {
                     Thread.Sleep((int)TimeSpan.FromSeconds(15).TotalMilliseconds);
-                    if (!manager.Status.running.Any())
+                    if (!scheduler.Status.running.Any())
                         break;
                     Log.Info("work still running, waiting...");
                 } while (DateTime.Now < maxWaitLocal);
@@ -120,6 +121,7 @@ namespace EastFive.Azure.Storage.Backup
 
         public async void OnTimer(object sender, ElapsedEventArgs args)
         {
+            Log.Info("WakeUp");
             if (fastStart)
             {
                 fastStart = false;
@@ -128,26 +130,29 @@ namespace EastFive.Azure.Storage.Backup
                 timer.Start();
             }
 
-            Log.Info("WakeUp");
-            var logMessage = await this.manager.OnWakeUp(
-                () => "a backup is already running".ToTask(),
+            KeyValuePair<string, bool> result;
+            do
+            {
+                result = await this.scheduler.CheckForWork(
+                () => "a backup is already running".PairWithValue(false).ToTask(),
                 async (serviceSettings, action, schedule, onCompleted, onStopped) =>
                 {
                     return await RunServicesAsync(serviceSettings, action, schedule,
                         errors =>
                         {
                             onCompleted(errors);
-                            return $"finished all work for {schedule.tag}. Detail: {(errors.Any() ? errors.Join(",") : "no errors")}";
+                            return $"finished all work for {schedule.tag}. Detail: {(errors.Any() ? errors.Join(",") : "no errors")}".PairWithValue(true);
                         },
                         errors =>
                         {
                             onStopped(errors);
-                            return $"stopped all work for {schedule.tag}. Detail: {(errors.Any() ? errors.Join(",") : "no errors")}";
+                            return $"stopped all work for {schedule.tag}. Detail: {(errors.Any() ? errors.Join(",") : "no errors")}".PairWithValue(false);
                         });
                 },
-                () => "not yet time to backup".ToTask(),
-                () => "unable to find any backup configuration".ToTask());
-            Log.Info(logMessage);
+                () => "not yet time to backup".PairWithValue(false).ToTask(),
+                () => "unable to find any backup configuration".PairWithValue(false).ToTask());
+                Log.Info(result.Key);
+            } while (result.Value);
         }
 
         private async Task<TResult> RunServicesAsync<TResult>(ServiceSettings serviceSettings, BackupAction action, RecurringSchedule schedule, Func<string[], TResult> onCompleted, Func<string[],TResult> onStopped)
