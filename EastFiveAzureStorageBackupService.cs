@@ -131,9 +131,10 @@ namespace EastFive.Azure.Storage.Backup
             }
 
             KeyValuePair<string, bool> result;
+            var nowLocal = DateTime.Now;
             do
             {
-                result = await this.scheduler.CheckForWork(
+                result = await this.scheduler.CheckForWork(nowLocal,
                 () => "a backup is already running".PairWithValue(false).ToTask(),
                 async (serviceSettings, action, schedule, onCompleted, onStopped) =>
                 {

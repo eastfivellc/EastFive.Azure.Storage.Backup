@@ -46,10 +46,9 @@ namespace EastFive.Azure.Storage.Backup.Configuration
             }
         }
 
-        public TResult CheckForWork<TResult>(Func<TResult> onAlreadyRunning, Func<ServiceSettings,BackupAction,RecurringSchedule,Func<string[],ActionStatus>,Func<string[],ActionStatus>,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
+        public TResult CheckForWork<TResult>(DateTime nowLocal, Func<TResult> onAlreadyRunning, Func<ServiceSettings,BackupAction,RecurringSchedule,Func<string[],ActionStatus>,Func<string[],ActionStatus>,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
         {
             var value = Load();
-            var nowLocal = DateTime.Now;
             if (nowLocal >= value.resetAtLocal && !value.running.Any())
                 value = ResetStatus();
 
