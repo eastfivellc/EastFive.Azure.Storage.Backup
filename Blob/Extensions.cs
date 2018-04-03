@@ -28,13 +28,32 @@ namespace EastFive.Azure.Storage.Backup.Blob
 
         private static readonly AccessCondition EmptyCondition = AccessCondition.GenerateEmptyCondition();
 
-        public static async Task<TResult> FindAllContainersAsync<TResult>(this CloudBlobClient sourceClient, Func<CloudBlobContainer[], TResult> onSuccess, Func<string,TResult> onFailure)
+        public static async Task<TResult> CopyAccountAsync<TResult>(this BlobCopyOptions options, CloudStorageAccount sourceAccount, CloudStorageAccount targetAccount, Func<bool> stopCalled, Func<string[], TResult> onCompleted)
+        {
+            var sourceClient = sourceAccount.CreateCloudBlobClient();
+            var targetClient = targetAccount.CreateCloudBlobClient();
+            return onCompleted(await await sourceClient.FindAllContainersAsync(stopCalled,
+                async sourceContainers =>
+                {
+                    var stats = await sourceContainers
+                        .Select(sourceContainer => sourceContainer.CopyContainerAsync(targetClient, options, stopCalled))
+                        .WhenAllAsync(options.maxContainerConcurrency);
+                    return stats
+                        .SelectMany(s => s.Value.errors)
+                        .ToArray();
+                },
+                why => new[] { why }.ToTask()));
+        }
+
+        private static async Task<TResult> FindAllContainersAsync<TResult>(this CloudBlobClient sourceClient, Func<bool> stopCalled, Func<CloudBlobContainer[], TResult> onSuccess, Func<string,TResult> onFailure)
         {
             var context = new OperationContext();
             BlobContinuationToken token = null;
             var containers = new List<CloudBlobContainer>();
             while (true)
             {
+                if (stopCalled())
+                    return onFailure($"listing containers stopped on {sourceClient.Credentials.AccountName}");
                 try
                 {
                     var segment = await sourceClient.ListContainersSegmentedAsync(null, ContainerListingDetails.All, 
@@ -52,7 +71,7 @@ namespace EastFive.Azure.Storage.Backup.Blob
             }
         }
 
-        public static async Task<KeyValuePair<string, BlobTransferStatistics>> CopyContainerAsync(this CloudBlobContainer sourceContainer, CloudBlobClient targetClient, BlobCopyOptions copyOptions, Func<bool> stopCalled)
+        private static async Task<KeyValuePair<string, BlobTransferStatistics>> CopyContainerAsync(this CloudBlobContainer sourceContainer, CloudBlobClient targetClient, BlobCopyOptions copyOptions, Func<bool> stopCalled)
         {
             var targetContainerName = sourceContainer.Name;
             if (stopCalled())

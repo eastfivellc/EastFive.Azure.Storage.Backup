@@ -21,7 +21,7 @@ namespace EastFive.Azure.Storage.Backup.Configuration
             };
         }
 
-        public ActionStatus ConcatRunning(Guid running)
+        public ActionStatus UpdateWithRunning(Guid running)
         {
             return new ActionStatus
             {
@@ -32,7 +32,7 @@ namespace EastFive.Azure.Storage.Backup.Configuration
             };
         }
 
-        public ActionStatus ConcatCompleted(Guid completed, string[] errors)
+        public ActionStatus UpdateWithCompleted(Guid completed, string[] errors)
         {
             return new ActionStatus
             {
@@ -52,6 +52,22 @@ namespace EastFive.Azure.Storage.Backup.Configuration
                 completed = this.completed,
                 errors = errors.Any() ? this.errors.Concat(errors).ToArray() : this.errors
             };
+        }
+
+        public bool PastEndOfDay(DateTime nowLocal)
+        {
+            // If something is running, the day isn't over yet.
+            return !SomethingRunning() && nowLocal >= resetAtLocal;
+        }
+
+        public bool HasStarted(Guid uniqueId)
+        {
+            return running.Contains(uniqueId) || completed.Contains(uniqueId);
+        }
+
+        public bool SomethingRunning()
+        {
+            return running.Any();
         }
     }
 }

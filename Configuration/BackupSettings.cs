@@ -1,5 +1,6 @@
 ﻿using EastFive.Azure.Storage.Backup.Blob;
 using EastFive.Azure.Storage.Backup.Table;
+using Microsoft.WindowsAzure.Storage;
 using System;
 using System.Linq;
 
@@ -16,6 +17,11 @@ namespace EastFive.Azure.Storage.Backup.Configuration
         public bool IsActive(DateTime asOfDateLocal)
         {
             return daysOfWeek.Contains(asOfDateLocal.DayOfWeek) && asOfDateLocal.TimeOfDay > timeLocal;
+        }
+
+        public bool GetTargetAccount(out CloudStorageAccount targetAccount)
+        {
+            return CloudStorageAccount.TryParse(targetConnectionString, out targetAccount);
         }
     }
 
@@ -34,6 +40,11 @@ namespace EastFive.Azure.Storage.Backup.Configuration
             return recurringSchedules
                 .Where(x => x.IsActive(asOfDateLocal))
                 .ToArray();
+        }
+
+        public bool GetSourceAccount(out CloudStorageAccount sourceAccount)
+        {
+            return CloudStorageAccount.TryParse(sourceConnectionString, out sourceAccount);
         }
     }
 

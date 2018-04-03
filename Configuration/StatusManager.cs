@@ -20,14 +20,23 @@ namespace EastFive.Azure.Storage.Backup.Configuration
         {
             this.statusPath = Path.Combine(path, "status.json");
             this.settings = settings;
-            var value = Load();
-            if (value.running.Any()) // nothing can be running at startup
-                Save((v, save) =>
-                {
-                    v.running = new Guid[] { };
-                    return save(v);
-                },
-                why => value);
+            var ex = Load(
+                ActionStatus.GetDefault,
+                v => default(Exception),
+                e => e);
+            if (default(Exception) != ex)
+                throw ex;
+
+            ex = Save((v, save) =>
+            {
+                // Clear any left over running status at startup, but preserve our completed ones.
+                if (v.SomethingRunning())
+                    save(v.ClearRunning(new string[] { }));
+                return default(Exception);
+            },
+            e => e);
+            if (default(Exception) != ex)
+                throw ex;
         }
 
         public ActionStatus Status
@@ -48,9 +57,8 @@ namespace EastFive.Azure.Storage.Backup.Configuration
 
         public TResult CheckForWork<TResult>(DateTime nowLocal, Func<TResult> onAlreadyRunning, Func<ServiceSettings,BackupAction,RecurringSchedule,Func<string[],ActionStatus>,Func<string[],ActionStatus>,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
         {
-            var value = Load();
-            if (nowLocal >= value.resetAtLocal && !value.running.Any())
-                value = ResetStatus();
+            // The status may have changed since the last check
+            var value = GetCurrentStatus(nowLocal);
 
             return GetNextAction(nowLocal, value,
                 onAlreadyRunning,
@@ -58,12 +66,13 @@ namespace EastFive.Azure.Storage.Backup.Configuration
                 {
                     if (!Save((v, save) =>
                         {
-                            if (v.running.Contains(schedule.uniqueId) || v.completed.Contains(schedule.uniqueId))
+                            // Inside the lock, we can check for sure whether it's already been started
+                            if (v.HasStarted(schedule.uniqueId))
                                 return false;
-                            save(v.ConcatRunning(schedule.uniqueId));
+                            save(v.UpdateWithRunning(schedule.uniqueId));
                             return true;
                         },
-                        why => false)
+                        e => false)
                     )
                         return onAlreadyRunning();
                     
@@ -96,25 +105,39 @@ namespace EastFive.Azure.Storage.Backup.Configuration
         private ActionStatus OnActionCompleted(Guid completed, string[] errors)
         {
             return Save(
-                (v,save) => save(v.ConcatCompleted(completed, errors)),
-                why => ActionStatus.GetDefault());
+                (v,save) => save(v.UpdateWithCompleted(completed, errors)),
+                e => status);
         }
 
         private ActionStatus OnActionStopped(string[] errors)
         {
             return Save(
                 (v, save) => save(v.ClearRunning(errors)),
-                why => ActionStatus.GetDefault());
+                e => status);
         }
 
-        private ActionStatus ResetStatus()
+        private ActionStatus GetCurrentStatus(DateTime nowLocal)
         {
-            return Save(
-                (v, save) => save(ActionStatus.GetDefault()),
-                why => ActionStatus.GetDefault());
+            var value = Load(
+                ActionStatus.GetDefault,
+                v => v,
+                e => status);
+            if (value.PastEndOfDay(nowLocal))
+            {
+                return Save(
+                    (v, save) =>
+                    {
+                        // Inside the lock, we can check for sure whether it is time to start the next day's schedule.
+                        if (v.PastEndOfDay(nowLocal))
+                            return save(ActionStatus.GetDefault());
+                        return v;
+                    },
+                    e => status);
+            }
+            return value;
         }
 
-        private TResult Save<TResult>(Func<ActionStatus,Func<ActionStatus,ActionStatus>,TResult> onExchange, Func<string,TResult> onFailure)
+        private TResult Save<TResult>(Func<ActionStatus,Func<ActionStatus,ActionStatus>,TResult> onExchange, Func<Exception,TResult> onFailure)
         {
             mutex.EnterWriteLock();
             try
@@ -132,7 +155,7 @@ namespace EastFive.Azure.Storage.Backup.Configuration
             catch (Exception e)
             {
                 EastFiveAzureStorageBackupService.Log.Error("unable to save status", e);
-                return onFailure(e.Message);
+                return onFailure(e);
             }
             finally
             {
@@ -140,15 +163,15 @@ namespace EastFive.Azure.Storage.Backup.Configuration
             }
         }
 
-        private ActionStatus Load()
+        private TResult Load<TResult>(Func<ActionStatus> getInitialValue, Func<ActionStatus,TResult> onLoad, Func<Exception, TResult> onFailure)
         {
             mutex.EnterWriteLock();
             try
             {
                 if (!File.Exists(statusPath))
                 {
-                    status = ActionStatus.GetDefault();
-                    return status;
+                    status = getInitialValue();
+                    return onLoad(status);
                 }
 
                 var text = File.ReadAllText(statusPath);
@@ -159,12 +182,12 @@ namespace EastFive.Azure.Storage.Backup.Configuration
                         new Newtonsoft.Json.Converters.StringEnumConverter()
                     }
                 });
-                return status;
+                return onLoad(status);
             }
             catch (Exception e)
             {
                 EastFiveAzureStorageBackupService.Log.Error($"Error loading status from path {statusPath}", e);
-                return status;
+                return onFailure(e);
             }
             finally
             {

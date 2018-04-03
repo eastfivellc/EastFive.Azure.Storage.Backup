@@ -1,5 +1,4 @@
-﻿using BlackBarLabs;
-using BlackBarLabs.Extensions;
+﻿using BlackBarLabs.Extensions;
 using EastFive.Azure.Storage.Backup.Blob;
 using EastFive.Azure.Storage.Backup.Configuration;
 using EastFive.Azure.Storage.Backup.Table;
@@ -138,16 +137,21 @@ namespace EastFive.Azure.Storage.Backup
                 () => "a backup is already running".PairWithValue(false).ToTask(),
                 async (serviceSettings, action, schedule, onCompleted, onStopped) =>
                 {
+                    Log.Info($"copying from {action.tag} to {schedule.tag}...");
+                    var watch = new Stopwatch();
+                    watch.Start();
                     return await RunServicesAsync(serviceSettings, action, schedule,
                         errors =>
                         {
+                            var msg = $"all work done for {schedule.tag} in {watch.Elapsed}. Detail: {(errors.Any() ? errors.Join(",") : "no errors")}";
+                            if (StopCalled())
+                            {
+                                onStopped(errors);
+                                return msg.PairWithValue(false);
+                            }
+
                             onCompleted(errors);
-                            return $"finished all work for {schedule.tag}. Detail: {(errors.Any() ? errors.Join(",") : "no errors")}".PairWithValue(true);
-                        },
-                        errors =>
-                        {
-                            onStopped(errors);
-                            return $"stopped all work for {schedule.tag}. Detail: {(errors.Any() ? errors.Join(",") : "no errors")}".PairWithValue(false);
+                            return msg.PairWithValue(true);
                         });
                 },
                 () => "not yet time to backup".PairWithValue(false).ToTask(),
@@ -156,66 +160,26 @@ namespace EastFive.Azure.Storage.Backup
             } while (result.Value);
         }
 
-        private async Task<TResult> RunServicesAsync<TResult>(ServiceSettings serviceSettings, BackupAction action, RecurringSchedule schedule, Func<string[], TResult> onCompleted, Func<string[],TResult> onStopped)
+        private async Task<TResult> RunServicesAsync<TResult>(ServiceSettings serviceSettings, BackupAction action, RecurringSchedule schedule, Func<string[], TResult> onCompleted)
         {
-            if (!CloudStorageAccount.TryParse(action.sourceConnectionString, out CloudStorageAccount sourceAccount))
+            if (!action.GetSourceAccount(out CloudStorageAccount sourceAccount))
                 return onCompleted(new[] { $"bad SOURCE connection string for {action.tag}" });
-            if (!CloudStorageAccount.TryParse(schedule.targetConnectionString, out CloudStorageAccount targetAccount))
+            if (!schedule.GetTargetAccount(out CloudStorageAccount targetAccount))
                 return onCompleted(new[] { $"bad TARGET connection string for {schedule.tag}" });
 
-            var watch = new Stopwatch();
-            watch.Start();
             var errors = new string[] { };
 
-            // Table
-            if (action.services.Contains(StorageService.Table))
-            {
-                if (StopCalled())
-                    return onStopped(errors);
-
-                Log.Info($"copying tables for {action.tag} to {schedule.tag}...");
-                var sourceClient = sourceAccount.CreateCloudTableClient();
-                var targetClient = targetAccount.CreateCloudTableClient();
-                var err = await await sourceClient.FindAllTablesAsync(
-                    async sourceTables =>
-                    {
-                        var stats = await sourceTables
-                            .Select(sourceTable => sourceTable.CopyTableAsync(targetClient, serviceSettings.table, StopCalled))
-                            .WhenAllAsync(serviceSettings.table.maxTableConcurrency);
-                        return stats
-                            .SelectMany(s => s.Value.errors)
-                            .ToArray();
-                    },
-                    why => new[] { why }.ToTask());
-                errors = errors.Concat(err).ToArray();
-                Log.Info($"finished copying tables for {action.tag} in {watch.Elapsed}");
-            }
-
-            // Blob
             if (action.services.Contains(StorageService.Blob))
-            {
-                if (StopCalled())
-                    return onStopped(errors);
+                errors = errors
+                    .Concat(await serviceSettings.blob.CopyAccountAsync(sourceAccount, targetAccount, StopCalled, msgs => msgs))
+                    .ToArray();
 
-                Log.Info($"copying blobs for {action.tag} to {schedule.tag}...");
-                var sourceClient = sourceAccount.CreateCloudBlobClient();
-                var targetClient = targetAccount.CreateCloudBlobClient();
-                var err = await await sourceClient.FindAllContainersAsync<Task<string[]>>(
-                    async sourceContainers => 
-                    {
-                        var stats = await sourceContainers
-                            .Select(sourceContainer => sourceContainer.CopyContainerAsync(targetClient, serviceSettings.blob, StopCalled))
-                            .WhenAllAsync(serviceSettings.blob.maxContainerConcurrency);
-                        return stats
-                            .SelectMany(s => s.Value.errors)
-                            .ToArray();
-                    },
-                    why => new[] { why }.ToTask());
-                errors = errors.Concat(err).ToArray();
-                Log.Info($"finished copying blobs for {action.tag} in {watch.Elapsed}");
-            }
+            if (action.services.Contains(StorageService.Table))
+                errors = errors
+                    .Concat(await serviceSettings.table.CopyAccountAsync(sourceAccount, targetAccount, StopCalled, msgs => msgs))
+                    .ToArray();
 
-            return StopCalled() ? onStopped(errors) : onCompleted(errors);
+            return onCompleted(errors);
         }
     }
 }

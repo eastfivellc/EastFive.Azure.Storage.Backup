@@ -1,4 +1,5 @@
-﻿using BlackBarLabs.Extensions;
+﻿using BlackBarLabs;
+using BlackBarLabs.Extensions;
 using EastFive.Azure.Storage.Backup.Configuration;
 using Microsoft.WindowsAzure.Storage;
 using Microsoft.WindowsAzure.Storage.Table;
@@ -18,13 +19,32 @@ namespace EastFive.Azure.Storage.Backup.Table
             public string partitionKey;
         }
 
-        public static async Task<TResult> FindAllTablesAsync<TResult>(this CloudTableClient sourceClient, Func<CloudTable[], TResult> onSuccess, Func<string, TResult> onFailure)
+        public static async Task<TResult> CopyAccountAsync<TResult>(this TableCopyOptions options, CloudStorageAccount sourceAccount, CloudStorageAccount targetAccount, Func<bool> stopCalled, Func<string[], TResult> onCompleted)
+        {
+            var sourceClient = sourceAccount.CreateCloudTableClient();
+            var targetClient = targetAccount.CreateCloudTableClient();
+            return onCompleted(await await sourceClient.FindAllTablesAsync(stopCalled,
+                async sourceTables =>
+                {
+                    var stats = await sourceTables
+                        .Select(sourceTable => sourceTable.CopyTableAsync(targetClient, options, stopCalled))
+                        .WhenAllAsync(options.maxTableConcurrency);
+                    return stats
+                        .SelectMany(s => s.Value.errors)
+                        .ToArray();
+                },
+                why => new[] { why }.ToTask()));
+        }
+
+        private static async Task<TResult> FindAllTablesAsync<TResult>(this CloudTableClient sourceClient, Func<bool> stopCalled, Func<CloudTable[], TResult> onSuccess, Func<string, TResult> onFailure)
         {
             var context = new OperationContext();
             TableContinuationToken token = null;
             var tables = new List<CloudTable>();
             while (true)
             {
+                if (stopCalled())
+                    return onFailure($"listing tables stopped on {sourceClient.Credentials.AccountName}");
                 try
                 {
                     var segment = await sourceClient.ListTablesSegmentedAsync(null,
@@ -42,7 +62,7 @@ namespace EastFive.Azure.Storage.Backup.Table
             }
         }
 
-        public static async Task<KeyValuePair<string, TableTransferStatistics>> CopyTableAsync(this CloudTable sourceTable, CloudTableClient targetClient, TableCopyOptions copyOptions, Func<bool> stopCalled)
+        private static async Task<KeyValuePair<string, TableTransferStatistics>> CopyTableAsync(this CloudTable sourceTable, CloudTableClient targetClient, TableCopyOptions copyOptions, Func<bool> stopCalled)
         {
             var targetTableName = sourceTable.Name;
             if (stopCalled())
