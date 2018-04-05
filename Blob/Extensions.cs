@@ -77,13 +77,14 @@ namespace EastFive.Azure.Storage.Backup.Blob
             if (stopCalled())
                 return sourceContainer.Name.PairWithValue(BlobTransferStatistics.Default.Concat(new[] { $"copy stopped on {targetContainerName}" }));
 
-            return await await sourceContainer.CreateIfNotExistTargetContainerForCopyAsync(targetClient, targetContainerName, stopCalled,
+            return await await sourceContainer.CreateIfNotExistTargetContainerForCopyAsync(targetClient, targetContainerName,
                 async (targetContainer, findExistingAsync, renewAccessAsync, releaseAccessAsync) =>
                 {
                     EastFiveAzureStorageBackupService.Log.Info($"starting {targetContainerName}");
                     try
                     {
-                        var existingTargetBlobs = await findExistingAsync();
+                        var existingTargetBlobs = await findExistingAsync(stopCalled);
+                        EastFiveAzureStorageBackupService.Log.Info($"{existingTargetBlobs.Value.Count} blobs already backed up for {targetContainerName}");
                         var pair = default(BlobContinuationToken).PairWithValue(BlobTransferStatistics.Default.Concat(existingTargetBlobs.Key));
                         BlobAccess access = default(BlobAccess);
                         Func<Task<BlobAccess>> renewWhenExpiredAsync =
@@ -118,8 +119,10 @@ namespace EastFive.Azure.Storage.Backup.Blob
                             {
                                 if (pair.Value.retries.Any())
                                 {
+                                    EastFiveAzureStorageBackupService.Log.Info($"retrying {targetContainerName}");
                                     var copyRetries = copyOptions.copyRetries;
-                                    existingTargetBlobs = await findExistingAsync();
+                                    existingTargetBlobs = await findExistingAsync(stopCalled);
+                                    EastFiveAzureStorageBackupService.Log.Info($"{existingTargetBlobs.Value.Count} blobs already backed up for {targetContainerName}");
                                     pair = default(BlobContinuationToken).PairWithValue(pair.Value.Concat(existingTargetBlobs.Key)); // just copies errors
                                     var checkCopyCompleteAfter = pair.Value.calc.GetNextInterval(copyOptions.minIntervalCheckCopy, copyOptions.maxIntervalCheckCopy);
                                     while (copyRetries-- > 0)
@@ -168,8 +171,8 @@ namespace EastFive.Azure.Storage.Backup.Blob
         }
 
         private static async Task<TResult> CreateIfNotExistTargetContainerForCopyAsync<TResult>(this CloudBlobContainer sourceContainer,
-           CloudBlobClient targetClient, string targetContainerName, Func<bool> stopCalled,
-           Func<CloudBlobContainer, Func<Task<KeyValuePair<string[],IDictionary<string, SparseCloudBlob>>>>, Func<TimeSpan, Task<BlobAccess>>, Func<Task>, TResult> onSuccess, Func<string,TResult> onFailure)
+           CloudBlobClient targetClient, string targetContainerName,
+           Func<CloudBlobContainer, Func<Func<bool>, Task<KeyValuePair<string[],IDictionary<string, SparseCloudBlob>>>>, Func<TimeSpan, Task<BlobAccess>>, Func<Task>, TResult> onSuccess, Func<string,TResult> onFailure)
         {
             try
             {
@@ -195,7 +198,7 @@ namespace EastFive.Azure.Storage.Backup.Blob
                 }
                 var keyName = $"{sourceContainer.ServiceClient.Credentials.AccountName}-{targetContainerName}-access";
                 return onSuccess(targetContainer,
-                    () =>
+                    (stopCalled) =>
                     {
                         return targetContainer.FindAllBlobsAsync(stopCalled,
                             blobs => new string[] { }.PairWithValue(blobs),

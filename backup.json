@@ -2,7 +2,9 @@
     "serviceSettings": {
         "table": {
             "maxTableConcurrency": 5,
-            "maxRowConcurrencyPerTable": 100,
+            "maxSegmentDownloadConcurrencyPerTable": 25,
+            "maxRowUploadConcurrencyPerTable": 100,
+            "partitionKeys": [],
             "copyRetries": 5
         },
         "blob": {

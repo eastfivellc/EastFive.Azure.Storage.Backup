@@ -86,7 +86,7 @@ namespace EastFive.Azure.Storage.Backup.Configuration
 
         private TResult GetNextAction<TResult>(DateTime nowLocal, ActionStatus value, Func<TResult> onAlreadyRunning, Func<ServiceSettings,BackupAction,RecurringSchedule,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
         {
-            if (!settings.Settings.HasValue)
+            if (!settings.Settings.HasValue || settings.Settings.Value.actions == null)
                 return onMissingConfiguration();
 
             if (value.running.Any())

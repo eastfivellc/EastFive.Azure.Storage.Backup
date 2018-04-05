@@ -34,7 +34,7 @@ namespace EastFive.Azure.Storage.Backup.Configuration
 
         public RecurringSchedule[] GetActiveSchedules(DateTime asOfDateLocal)
         {
-            if (!services.Any())
+            if (recurringSchedules == null || services == null || !services.Any())
                 return new RecurringSchedule[] { };
 
             return recurringSchedules

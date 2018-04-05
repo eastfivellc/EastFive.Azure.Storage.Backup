@@ -162,21 +162,22 @@ namespace EastFive.Azure.Storage.Backup
 
         private async Task<TResult> RunServicesAsync<TResult>(ServiceSettings serviceSettings, BackupAction action, RecurringSchedule schedule, Func<string[], TResult> onCompleted)
         {
+            if (action.services == null || !action.services.Any())
+                return onCompleted(new string[] { $"no services for {action.tag}"});
             if (!action.GetSourceAccount(out CloudStorageAccount sourceAccount))
                 return onCompleted(new[] { $"bad SOURCE connection string for {action.tag}" });
             if (!schedule.GetTargetAccount(out CloudStorageAccount targetAccount))
                 return onCompleted(new[] { $"bad TARGET connection string for {schedule.tag}" });
 
             var errors = new string[] { };
+            if (action.services.Contains(StorageService.Table))
+                errors = errors
+                    .Concat(await serviceSettings.table.CopyAccountAsync(sourceAccount, targetAccount, StopCalled, msgs => msgs))
+                    .ToArray();
 
             if (action.services.Contains(StorageService.Blob))
                 errors = errors
                     .Concat(await serviceSettings.blob.CopyAccountAsync(sourceAccount, targetAccount, StopCalled, msgs => msgs))
-                    .ToArray();
-
-            if (action.services.Contains(StorageService.Table))
-                errors = errors
-                    .Concat(await serviceSettings.table.CopyAccountAsync(sourceAccount, targetAccount, StopCalled, msgs => msgs))
                     .ToArray();
 
             return onCompleted(errors);

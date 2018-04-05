@@ -1,7 +1,6 @@
 ﻿using EastFive.Azure.Storage.Backup.Configuration;
 using Microsoft.WindowsAzure.Storage.RetryPolicies;
 using Microsoft.WindowsAzure.Storage.Table;
-using System;
 
 namespace EastFive.Azure.Storage.Backup.Table
 {
@@ -15,7 +14,10 @@ namespace EastFive.Azure.Storage.Backup.Table
             };
 
         public int maxTableConcurrency;
-        public int maxRowConcurrencyPerTable;
+        public int maxSegmentDownloadConcurrencyPerTable;
+        public int maxRowUploadConcurrencyPerTable;
+        // can be empty to indicate all keys
+        public string[] partitionKeys; 
         public int copyRetries;
     }
 }

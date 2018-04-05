@@ -23,7 +23,7 @@ Clone each into a common directory, say `c:\backup.`
 ## Installing
 From an administrative command window, type:
 ```
-c:\windows\microsoft.net\Framework\v4.0.30319\InstallUtil.exe c:\backup\EastFive.Azure.Storage.Backup.exe
+c:\windows\microsoft.net\Framework\v4.0.30319\InstallUtil.exe c:\backup\EastFive.Azure.Storage.Backup\bin\Release\EastFive.Azure.Storage.Backup.exe
 ```
 Open services.msc, and start **EastFive.Azure.Storage.Backup.Service**
 
@@ -36,7 +36,9 @@ These options apply to all table and blob transfers:
 
 Options under `serviceSettings / table`
 * `maxTableConcurrency` - The max number of tables to copy concurrently.  Higher uses more bandwidth and cpu.  Default is 5.
-* `maxRowConcurrencyPerTable` - The max number of rows to insert or replace at a time.  Azure limits this to 100, but you can choose lower if the payload is too large.  Default is 100.
+* `maxSegmentDownloadConcurrencyPerTable` - The max number of table segments to process at a time.  Each segment is about 1000 rows and higher uses more memory.  Default is 25.
+* `maxRowUploadConcurrencyPerTable` - The max number of rows to insert or replace at a time.  Azure limits this to 100, but you can choose lower if the payload is too large.  Default is 100.
+* `partitionKeys` - The array of partition key strings, or empty for all partition keys, to copy.  Specifying this can help large tables by retrieving in parallel by partition key.  Default is empty.
 * `copyRetries` - The number of times to retry a copy if there were any failures.  Default is 5.
 
 Options under `serviceSettings / blob`
@@ -55,7 +57,9 @@ Example:
 "serviceSettings": {
     "table": {
         "maxTableConcurrency": 5,
-        "maxRowConcurrencyPerTable": 100,
+        "maxRowUploadConcurrencyPerTable": 100,
+        "maxSegmentDownloadConcurrencyPerTable": 25,
+        "partitionKeys": [],
         "copyRetries": 5
     },
     "blob": {
