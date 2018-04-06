@@ -30,6 +30,7 @@ namespace EastFive.Azure.Storage.Backup.Configuration
         public string tag;
         public string sourceConnectionString;
         public StorageService[] services;
+        public ServiceSettings serviceSettings;
         public RecurringSchedule[] recurringSchedules;
 
         public RecurringSchedule[] GetActiveSchedules(DateTime asOfDateLocal)
@@ -60,7 +61,6 @@ namespace EastFive.Azure.Storage.Backup.Configuration
 
     public struct BackupSettings
     {
-        public ServiceSettings serviceSettings;
         public BackupAction[] actions;
     }
 }

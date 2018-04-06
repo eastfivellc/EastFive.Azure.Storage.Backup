@@ -32,16 +32,54 @@ Note: To uninstall, add the `/u` option.
 ## Configuration File 
 [backup.json](backup.json) is in the root folder, and once the service is started, a file watcher is used to check it for changes so that you don't have to restart the service.
 
-These options apply to all table and blob transfers:
+`actions` is an array of backups where you specify the source and target along with the day of week and time of day for the copy to occur.
 
-Options under `serviceSettings / table`
+Example:
+```
+{
+    "actions": [
+        {
+            "tag": "production",
+            "sourceConnectionString": "",
+            "services": [
+                "Table",
+                "Blob"
+            ],
+            "serviceSettings" = {}, <-- described below
+            "recurringSchedules": [
+                {
+                    "uniqueId": "F2EEBD42-534E-4028-BAC1-7E0558796268",
+                    "tag": "my backup",
+                    "targetConnectionString": "",
+                    "daysOfWeek": [
+                        "Sunday",
+                        "Monday",
+                        "Tuesday",
+                        "Wednesday",
+                        "Thursday",
+                        "Friday",
+                        "Saturday"
+                    ],
+                    "timeLocal": "21:00:00"
+                }
+            ]
+        }
+    ]
+}
+```
+
+`recurringSchedules` is an array where you can setup several targets which backup on different days or more than once on the same day.
+
+These options let you customize the table and blob transfers:
+
+Table options
 * `maxTableConcurrency` - The max number of tables to copy concurrently.  Higher uses more bandwidth and cpu.  Default is 5.
 * `maxSegmentDownloadConcurrencyPerTable` - The max number of table segments to process at a time.  Each segment is about 1000 rows and higher uses more memory.  Default is 25.
 * `maxRowUploadConcurrencyPerTable` - The max number of rows to insert or replace at a time.  Azure limits this to 100, but you can choose lower if the payload is too large.  Default is 100.
 * `partitionKeys` - The array of partition key strings, or empty for all partition keys, to copy.  Specifying this can help large tables by retrieving in parallel by partition key.  Default is empty.
 * `copyRetries` - The number of times to retry a copy if there were any failures.  Default is 5.
 
-Options under `serviceSettings / blob`
+Blob options
 * `accessPeriod` - The time span after which a new container access window is requested. Default is 1 hour.
 * `maxContainerConcurrency` - The max number of containers to copy concurrently.  Higher uses more bandwidth and cpu.  Default is 2.
 * `maxBlobConcurrencyPerContainer` - The max number of blobs on which to initiate a background copy concurrently.  Default is 200.
@@ -73,36 +111,3 @@ Example:
     }
 },
 ```
-
-Next, `actions` is an array of backups where you specify the source and target along with the day of week and time of day for the copy to occur.
-
-Example:
-```
-{
-    "tag": "production",
-    "sourceConnectionString": "",
-    "services": [
-        "Table",
-        "Blob"
-    ],
-    "recurringSchedules": [
-        {
-            "uniqueId": "F2EEBD42-534E-4028-BAC1-7E0558796268",
-            "tag": "my backup",
-            "targetConnectionString": "",
-            "daysOfWeek": [
-                "Sunday",
-                "Monday",
-                "Tuesday",
-                "Wednesday",
-                "Thursday",
-                "Friday",
-                "Saturday"
-            ],
-            "timeLocal": "21:00:00"
-        }
-    ]
-}
-```
-
-`recurringSchedules` is an array where you can setup several targets which backup on different days or more than once on the same day.

@@ -135,12 +135,12 @@ namespace EastFive.Azure.Storage.Backup
             {
                 result = await this.scheduler.CheckForWork(nowLocal,
                 () => "a backup is already running".PairWithValue(false).ToTask(),
-                async (serviceSettings, action, schedule, onCompleted, onStopped) =>
+                async (action, schedule, onCompleted, onStopped) =>
                 {
                     Log.Info($"copying from {action.tag} to {schedule.tag}...");
                     var watch = new Stopwatch();
                     watch.Start();
-                    return await RunServicesAsync(serviceSettings, action, schedule,
+                    return await RunServicesAsync(action, schedule,
                         errors =>
                         {
                             var msg = $"all work done for {schedule.tag} in {watch.Elapsed}. Detail: {(errors.Any() ? errors.Join(",") : "no errors")}";
@@ -160,7 +160,7 @@ namespace EastFive.Azure.Storage.Backup
             } while (result.Value);
         }
 
-        private async Task<TResult> RunServicesAsync<TResult>(ServiceSettings serviceSettings, BackupAction action, RecurringSchedule schedule, Func<string[], TResult> onCompleted)
+        private async Task<TResult> RunServicesAsync<TResult>(BackupAction action, RecurringSchedule schedule, Func<string[], TResult> onCompleted)
         {
             if (action.services == null || !action.services.Any())
                 return onCompleted(new string[] { $"no services for {action.tag}"});
@@ -172,12 +172,12 @@ namespace EastFive.Azure.Storage.Backup
             var errors = new string[] { };
             if (action.services.Contains(StorageService.Table))
                 errors = errors
-                    .Concat(await serviceSettings.table.CopyAccountAsync(sourceAccount, targetAccount, StopCalled, msgs => msgs))
+                    .Concat(await action.serviceSettings.table.CopyAccountAsync(sourceAccount, targetAccount, StopCalled, msgs => msgs))
                     .ToArray();
 
             if (action.services.Contains(StorageService.Blob))
                 errors = errors
-                    .Concat(await serviceSettings.blob.CopyAccountAsync(sourceAccount, targetAccount, StopCalled, msgs => msgs))
+                    .Concat(await action.serviceSettings.blob.CopyAccountAsync(sourceAccount, targetAccount, StopCalled, msgs => msgs))
                     .ToArray();
 
             return onCompleted(errors);

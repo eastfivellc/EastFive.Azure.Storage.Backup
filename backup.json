@@ -1,22 +1,4 @@
 ﻿{
-    "serviceSettings": {
-        "table": {
-            "maxTableConcurrency": 5,
-            "maxSegmentDownloadConcurrencyPerTable": 25,
-            "maxRowUploadConcurrencyPerTable": 100,
-            "partitionKeys": [],
-            "copyRetries": 5
-        },
-        "blob": {
-            "accessPeriod": "01:00:00",
-            "maxContainerConcurrency": 2,
-            "maxBlobConcurrencyPerContainer": 200,
-            "minIntervalCheckCopy": "00:00:01",
-            "maxIntervalCheckCopy": "00:00:15",
-            "maxTotalWaitForCopy": "00:05:00",
-            "copyRetries": 5
-        }
-    },
     "actions": [
         {
             "tag": "production",
@@ -25,6 +7,24 @@
                 "Table",
                 "Blob"
             ],
+            "serviceSettings": {
+                "table": {
+                    "maxTableConcurrency": 5,
+                    "maxSegmentDownloadConcurrencyPerTable": 25,
+                    "maxRowUploadConcurrencyPerTable": 100,
+                    "partitionKeys": [],
+                    "copyRetries": 5
+                },
+                "blob": {
+                    "accessPeriod": "01:00:00",
+                    "maxContainerConcurrency": 2,
+                    "maxBlobConcurrencyPerContainer": 200,
+                    "minIntervalCheckCopy": "00:00:01",
+                    "maxIntervalCheckCopy": "00:00:15",
+                    "maxTotalWaitForCopy": "00:05:00",
+                    "copyRetries": 5
+                }
+            },
             "recurringSchedules": [
                 {
                     "uniqueId": "F2EEBD42-534E-4028-BAC1-7E0558796268",

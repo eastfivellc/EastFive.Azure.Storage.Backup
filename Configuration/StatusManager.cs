@@ -55,14 +55,14 @@ namespace EastFive.Azure.Storage.Backup.Configuration
             }
         }
 
-        public TResult CheckForWork<TResult>(DateTime nowLocal, Func<TResult> onAlreadyRunning, Func<ServiceSettings,BackupAction,RecurringSchedule,Func<string[],ActionStatus>,Func<string[],ActionStatus>,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
+        public TResult CheckForWork<TResult>(DateTime nowLocal, Func<TResult> onAlreadyRunning, Func<BackupAction,RecurringSchedule,Func<string[],ActionStatus>,Func<string[],ActionStatus>,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
         {
             // The status may have changed since the last check
             var value = GetCurrentStatus(nowLocal);
 
             return GetNextAction(nowLocal, value,
                 onAlreadyRunning,
-                (serviceSettings,action,schedule) =>
+                (action,schedule) =>
                 {
                     if (!Save((v, save) =>
                         {
@@ -76,7 +76,7 @@ namespace EastFive.Azure.Storage.Backup.Configuration
                     )
                         return onAlreadyRunning();
                     
-                    return onNext(serviceSettings, action, schedule,
+                    return onNext(action, schedule,
                         (errors) => OnActionCompleted(schedule.uniqueId, errors),
                         OnActionStopped);
                 },
@@ -84,7 +84,7 @@ namespace EastFive.Azure.Storage.Backup.Configuration
                 onMissingConfiguration);
         }
 
-        private TResult GetNextAction<TResult>(DateTime nowLocal, ActionStatus value, Func<TResult> onAlreadyRunning, Func<ServiceSettings,BackupAction,RecurringSchedule,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
+        private TResult GetNextAction<TResult>(DateTime nowLocal, ActionStatus value, Func<TResult> onAlreadyRunning, Func<BackupAction,RecurringSchedule,TResult> onNext, Func<TResult> onNothingToDo, Func<TResult> onMissingConfiguration)
         {
             if (!settings.Settings.HasValue || settings.Settings.Value.actions == null)
                 return onMissingConfiguration();
@@ -99,7 +99,7 @@ namespace EastFive.Azure.Storage.Backup.Configuration
                 .OrderBy(pair => pair.Value.timeLocal)
                 .Take(1)
                 .ToArray();
-            return ready.Length == 1 ? onNext(settings.Settings.Value.serviceSettings, ready[0].Key, ready[0].Value) : onNothingToDo();
+            return ready.Length == 1 ? onNext(ready[0].Key, ready[0].Value) : onNothingToDo();
         }
 
         private ActionStatus OnActionCompleted(Guid completed, string[] errors)

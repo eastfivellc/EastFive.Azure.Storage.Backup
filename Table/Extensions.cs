@@ -198,13 +198,15 @@ namespace EastFive.Azure.Storage.Backup.Table
                                 rows => new string[] { }.PairWithValue(rows),
                                 (why, partialRowList) => new[] { why }.PairWithValue(partialRowList));
                         else
-                            return targetTable.FindAllRowsByQueryAsync(new TableQuery<DynamicTableEntity>(), stopCalled,
+                            return targetTable.FindAllRowsByQueryAsync(
+                                new TableQuery<DynamicTableEntity>().Select(new string[] { "notacolumn" }), // we are not interested in the properties of the target so don't download them
+                                stopCalled,
                                 rows => new string[] { }.PairWithValue((IDictionary<string,SparseEntity>)rows.ToDictionary()),
                                 (why, partialRowList) => new[] { why }.PairWithValue((IDictionary<string, SparseEntity>)partialRowList.ToDictionary()));
                     },
                     (details, stopCalled) =>
                     {
-                        if (partitionKeys != null)
+                        if (partitionKeys != null && partitionKeys.Length > 0)
                         {
                             var innerDetails = details.Any() ? details : SegmentedQuery.GetForPartitionKeys(partitionKeys);  // init the run
                             return sourceTable.FindNextTableSegmentByPartitionKeysAsync(innerDetails, numberOfSegments, stopCalled,
@@ -314,7 +316,8 @@ namespace EastFive.Azure.Storage.Backup.Table
                     key =>
                     {
                         var query = new TableQuery<DynamicTableEntity>()
-                            .Where(TableQuery.GenerateFilterCondition("PartitionKey", QueryComparisons.Equal, key));
+                            .Where(TableQuery.GenerateFilterCondition("PartitionKey", QueryComparisons.Equal, key))
+                            .Select(new string[] { "notacolumn" }); // we are not interested in the properties of the target so don't download them
 
                         return targetTable.FindAllRowsByQueryAsync(query, stopCalled,
                             rows => string.Empty.PairWithValue(rows),
