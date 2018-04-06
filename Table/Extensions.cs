@@ -20,6 +20,46 @@ namespace EastFive.Azure.Storage.Backup.Table
             public string partitionKey;
         }
 
+        private struct SegmentedQuery
+        {
+            public TableContinuationToken token;
+            public TableQuery<DynamicTableEntity> query;
+
+            public static SegmentedQuery Default = new SegmentedQuery
+            {
+                token = default(TableContinuationToken),
+                query = new TableQuery<DynamicTableEntity>()
+            };
+
+            public static SegmentedQuery[] GetForPartitionKeys(string[] partitionKeys)
+            {
+                return partitionKeys
+                .Select(
+                    key => new SegmentedQuery
+                    {
+                        token = default(TableContinuationToken),
+                        query = new TableQuery<DynamicTableEntity>()
+                            .Where(TableQuery.GenerateFilterCondition("PartitionKey",QueryComparisons.Equal,key))
+                    })
+                .ToArray();
+            }
+
+            public SegmentedQuery UpdateToken(TableContinuationToken token)
+            {
+                return new SegmentedQuery
+                {
+                    token = token,
+                    query = this.query
+                };
+            }
+        }
+
+        private struct SegmentedQueryResult
+        {
+            public SegmentedQuery[] details;
+            public DynamicTableEntity[] rows;
+        }
+
         public static async Task<TResult> CopyAccountAsync<TResult>(this TableCopyOptions options, CloudStorageAccount sourceAccount, CloudStorageAccount targetAccount, Func<bool> stopCalled, Func<string[], TResult> onCompleted)
         {
             var sourceClient = sourceAccount.CreateCloudTableClient();
@@ -69,32 +109,29 @@ namespace EastFive.Azure.Storage.Backup.Table
             if (stopCalled())
                 return sourceTable.Name.PairWithValue(TableTransferStatistics.Default.Concat(new[] { $"copy stopped on {targetTableName}" }));
 
-            return await await sourceTable.CreateIfNotExistTargetTableForCopyAsync(targetClient, targetTableName, copyOptions.partitionKeys,
-                async (targetTable, findExistingAsync) =>
+            return await await sourceTable.CreateIfNotExistTargetTableForCopyAsync(targetClient, targetTableName, copyOptions.partitionKeys, copyOptions.maxSegmentDownloadConcurrencyPerTable,
+                async (targetTable, findExistingAsync, getNextSegmentAsync) =>
                 {
                     EastFiveAzureStorageBackupService.Log.Info($"starting {targetTableName}");
                     try
                     {
                         var existingTargetRows = await findExistingAsync(stopCalled);
                         EastFiveAzureStorageBackupService.Log.Info($"{existingTargetRows.Value.Count} entities already backed up for {targetTableName}");
-                        var pair = default(TableContinuationToken).PairWithValue(TableTransferStatistics.Default.Concat(existingTargetRows.Key));
+                        var pair = new SegmentedQuery[] { }.PairWithValue(TableTransferStatistics.Default.Concat(existingTargetRows.Key));  // just copies errors
                         while (true)
                         {
                             if (stopCalled())
                                 return sourceTable.Name.PairWithValue(pair.Value);
 
-                            pair = await await sourceTable.FindNextTableSegmentAsync(pair.Key, copyOptions.maxSegmentDownloadConcurrencyPerTable, stopCalled,
-                                async (token, rows) =>
-                                {
-                                    var stats = await rows.CopyRowsAsync(targetTable, existingTargetRows.Value, copyOptions.maxRowUploadConcurrencyPerTable);
-                                    rows = null;
-                                    return token.PairWithValue(pair.Value.Concat(stats));
-                                },
-                                why => default(TableContinuationToken).PairWithValue(pair.Value.Concat(new[] { why })).ToTask());
+                            var nextSourceRows = await getNextSegmentAsync(pair.Key, stopCalled);
+                            pair = nextSourceRows.Value.details
+                                .PairWithValue(pair.Value.Concat(nextSourceRows.Key) // just copies errors
+                                    .Concat(await nextSourceRows.Value.rows.CopyRowsAsync(targetTable, existingTargetRows.Value, copyOptions.maxRowUploadConcurrencyPerTable)));  // gets result of work
+
                             pair.Value.LogProgress(
                                 msg => EastFiveAzureStorageBackupService.Log.Info($"(progress) {targetTableName} -> {msg}"));
 
-                            if (default(TableContinuationToken) == pair.Key)
+                            if (!pair.Key.Any()) // wait until all the tokens are gone
                             {
                                 if (pair.Value.retries.Any())
                                 {
@@ -102,7 +139,7 @@ namespace EastFive.Azure.Storage.Backup.Table
                                     var copyRetries = copyOptions.copyRetries;
                                     existingTargetRows = await findExistingAsync(stopCalled);
                                     EastFiveAzureStorageBackupService.Log.Info($"{existingTargetRows.Value.Count} entities already backed up for {targetTableName}");
-                                    pair = default(TableContinuationToken).PairWithValue(pair.Value.Concat(existingTargetRows.Key));  // just copies errors
+                                    pair = new SegmentedQuery[] { }.PairWithValue(pair.Value.Concat(existingTargetRows.Key));  // just copies errors
                                     while (copyRetries-- > 0)
                                     {
                                         if (stopCalled())
@@ -112,7 +149,7 @@ namespace EastFive.Azure.Storage.Backup.Table
                                             .Select(x => x.Key)
                                             .ToArray()
                                             .CopyRowsAsync(targetTable, existingTargetRows.Value, copyOptions.maxRowUploadConcurrencyPerTable);
-                                        pair = default(TableContinuationToken).PairWithValue(new TableTransferStatistics
+                                        pair = new SegmentedQuery[] { }.PairWithValue(new TableTransferStatistics
                                         {
                                             errors = pair.Value.errors.Concat(stats.errors).ToArray(),
                                             successes = pair.Value.successes + stats.successes,
@@ -138,8 +175,8 @@ namespace EastFive.Azure.Storage.Backup.Table
         }
 
         private static async Task<TResult> CreateIfNotExistTargetTableForCopyAsync<TResult>(this CloudTable sourceTable,
-            CloudTableClient targetClient, string targetTableName, string[] partitionKeys,
-            Func<CloudTable, Func<Func<bool>,Task<KeyValuePair<string[], IDictionary<string, SparseEntity>>>>, TResult> onSuccess,
+            CloudTableClient targetClient, string targetTableName, string[] partitionKeys, int numberOfSegments,
+            Func<CloudTable, Func<Func<bool>,Task<KeyValuePair<string[], IDictionary<string, SparseEntity>>>>, Func<SegmentedQuery[], Func<bool>, Task<KeyValuePair<string[],SegmentedQueryResult>>>, TResult> onSuccess,
             Func<string, TResult> onFailure)
         {
             try
@@ -164,6 +201,23 @@ namespace EastFive.Azure.Storage.Backup.Table
                             return targetTable.FindAllRowsByQueryAsync(new TableQuery<DynamicTableEntity>(), stopCalled,
                                 rows => new string[] { }.PairWithValue((IDictionary<string,SparseEntity>)rows.ToDictionary()),
                                 (why, partialRowList) => new[] { why }.PairWithValue((IDictionary<string, SparseEntity>)partialRowList.ToDictionary()));
+                    },
+                    (details, stopCalled) =>
+                    {
+                        if (partitionKeys != null)
+                        {
+                            var innerDetails = details.Any() ? details : SegmentedQuery.GetForPartitionKeys(partitionKeys);  // init the run
+                            return sourceTable.FindNextTableSegmentByPartitionKeysAsync(innerDetails, numberOfSegments, stopCalled,
+                                result => new string[] { }.PairWithValue(result),
+                                (why, result) => new[] { why }.PairWithValue(result));
+                        }
+                        else
+                        {
+                            var innerDetails = details.Any() ? details.First() : SegmentedQuery.Default;  // init the run
+                            return sourceTable.FindNextTableSegmentByQueryAsync(innerDetails, numberOfSegments, stopCalled,
+                              (result) => new string[] { }.PairWithValue(result),
+                              (why, result) => new[] { why }.PairWithValue(result));
+                        }
                     });
             }
             catch (Exception e)
@@ -172,11 +226,41 @@ namespace EastFive.Azure.Storage.Backup.Table
             }
         }
 
-        private static async Task<TResult> FindNextTableSegmentAsync<TResult>(this CloudTable sourceTable, TableContinuationToken token, int numberOfSegments, Func<bool> stopCalled,
-            Func<TableContinuationToken, DynamicTableEntity[], TResult> onSuccess, Func<string, TResult> onFailure)
+        private static async Task<TResult> FindNextTableSegmentByPartitionKeysAsync<TResult>(this CloudTable sourceTable, SegmentedQuery[] details, int numberOfSegments, Func<bool> stopCalled, Func<SegmentedQueryResult, TResult> onSuccess, Func<string, SegmentedQueryResult, TResult> onFailure)
+        {
+            var errorsWithResults = await details
+                .Select(
+                    detail =>
+                    {
+                        return sourceTable.FindNextTableSegmentByQueryAsync(detail, numberOfSegments, stopCalled,
+                            x => string.Empty.PairWithValue(x),
+                            (why, x) => why.PairWithValue(x));
+                    })
+                .WhenAllAsync();
+
+            var error = errorsWithResults
+                .Select(x => x.Key)
+                .Where(x => !string.IsNullOrEmpty(x))
+                .Join(",");
+            var result = new SegmentedQueryResult
+            {
+                details = errorsWithResults
+                    .SelectMany(x => x.Value.details)
+                    .ToArray(),
+                rows = errorsWithResults
+                    .SelectMany(x => x.Value.rows)
+                    .ToArray()
+            };
+            if (string.IsNullOrEmpty(error))
+                return onSuccess(result);
+
+            return onFailure(error, result);
+        }
+
+        private static async Task<TResult> FindNextTableSegmentByQueryAsync<TResult>(this CloudTable sourceTable, SegmentedQuery detail, int numberOfSegments, Func<bool> stopCalled,
+            Func<SegmentedQueryResult, TResult> onSuccess, Func<string, SegmentedQueryResult, TResult> onFailure)
         {
             var context = new OperationContext();
-            var query = new TableQuery<DynamicTableEntity>();
             var list = new List<DynamicTableEntity>(numberOfSegments * 1000);
             var retryTimes = ServiceSettings.defaultMaxAttempts;
             while (true)
@@ -184,13 +268,27 @@ namespace EastFive.Azure.Storage.Backup.Table
                 try
                 {
                     if (stopCalled())
-                        return onFailure($"stopped finding segments for {sourceTable.Name}");
+                        return onFailure($"stopped finding segments for {sourceTable.Name}", new SegmentedQueryResult
+                            {
+                                details = new SegmentedQuery[] { },
+                                rows = list.ToArray()
+                            });
 
-                    var segment = await sourceTable.ExecuteQuerySegmentedAsync(query, token, TableCopyOptions.requestOptions, context);
+                    var segment = await sourceTable.ExecuteQuerySegmentedAsync(detail.query, detail.token, TableCopyOptions.requestOptions, context);
                     list.AddRange(segment.Results);
-                    token = segment.ContinuationToken;
-                    if (token == null || --numberOfSegments < 1)
-                        return onSuccess(token, list.ToArray());
+                    detail = detail.UpdateToken(segment.ContinuationToken);
+                    if (detail.token == null)
+                        return onSuccess(new SegmentedQueryResult
+                        {
+                            details = new SegmentedQuery[] { },
+                            rows = list.ToArray()
+                        });
+                    if (--numberOfSegments < 1)
+                        return onSuccess(new SegmentedQueryResult
+                        {
+                            details = new[] { detail },
+                            rows = list.ToArray()
+                        });
                 }
                 catch (Exception e)
                 {
@@ -199,7 +297,11 @@ namespace EastFive.Azure.Storage.Backup.Table
                         await Task.Delay(ServiceSettings.defaultBackoff);
                         continue;
                     }
-                    return onFailure($"Exception retrieving next table segment, Detail: {e.Message}");
+                    return onFailure($"Exception retrieving next table segment, Detail: {e.Message}", new SegmentedQueryResult
+                        {
+                            details = new SegmentedQuery[] { },
+                            rows = list.ToArray()
+                        });
                 }
             }
         }
@@ -209,16 +311,12 @@ namespace EastFive.Azure.Storage.Backup.Table
             // Splits request by partition key for parallel download
             var errorsWithResults = await partitionKeys
                 .Select(
-                    async partitionIndex =>
+                    key =>
                     {
                         var query = new TableQuery<DynamicTableEntity>()
-                            .Where(
-                                TableQuery.GenerateFilterCondition(
-                                    "PartitionKey",
-                                    QueryComparisons.Equal,
-                                    partitionIndex.ToString()));
+                            .Where(TableQuery.GenerateFilterCondition("PartitionKey", QueryComparisons.Equal, key));
 
-                        return await targetTable.FindAllRowsByQueryAsync(query, stopCalled,
+                        return targetTable.FindAllRowsByQueryAsync(query, stopCalled,
                             rows => string.Empty.PairWithValue(rows),
                             (why, rows) => why.PairWithValue(rows));
                     })
