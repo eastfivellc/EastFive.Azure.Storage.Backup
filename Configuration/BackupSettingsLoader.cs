@@ -27,7 +27,10 @@ namespace EastFive.Azure.Storage.Backup.Configuration
         private void Load()
         {
             EastFiveAzureStorageBackupService.Log.Info($"loading config from {configPath}");
-            var text = File.ReadAllText(configPath);
+            string text;
+            using (var fs = new FileStream(configPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (var reader = new StreamReader(fs))
+                text = reader.ReadToEnd();
             try
             {
                 Settings = JsonConvert.DeserializeObject<BackupSettings>(text, new JsonSerializerSettings()

@@ -199,7 +199,7 @@ namespace EastFive.Azure.Storage.Backup.Table
                                 (why, partialRowList) => new[] { why }.PairWithValue(partialRowList));
                         else
                             return targetTable.FindAllRowsByQueryAsync(
-                                new TableQuery<DynamicTableEntity>().Select(new string[] { "notacolumn" }), // we are not interested in the properties of the target so don't download them
+                                new TableQuery<DynamicTableEntity>().Select(new string[] { "PartitionKey" }), // we are not interested in the properties of the target so don't download them
                                 stopCalled,
                                 rows => new string[] { }.PairWithValue((IDictionary<string,SparseEntity>)rows.ToDictionary()),
                                 (why, partialRowList) => new[] { why }.PairWithValue((IDictionary<string, SparseEntity>)partialRowList.ToDictionary()));
@@ -317,7 +317,7 @@ namespace EastFive.Azure.Storage.Backup.Table
                     {
                         var query = new TableQuery<DynamicTableEntity>()
                             .Where(TableQuery.GenerateFilterCondition("PartitionKey", QueryComparisons.Equal, key))
-                            .Select(new string[] { "notacolumn" }); // we are not interested in the properties of the target so don't download them
+                            .Select(new string[] { "PartitionKey" }); // we are not interested in the properties of the target so don't download them
 
                         return targetTable.FindAllRowsByQueryAsync(query, stopCalled,
                             rows => string.Empty.PairWithValue(rows),
