@@ -9,6 +9,8 @@
             ],
             "serviceSettings": {
                 "table": {
+                    "includedTables": [],
+                    "excludedTables": [],
                     "maxTableConcurrency": 5,
                     "maxSegmentDownloadConcurrencyPerTable": 25,
                     "maxRowUploadConcurrencyPerTable": 100,
@@ -16,6 +18,8 @@
                     "copyRetries": 5
                 },
                 "blob": {
+                    "includedContainers": [],
+                    "excludedContainers": [],
                     "accessPeriod": "01:00:00",
                     "maxContainerConcurrency": 2,
                     "maxBlobConcurrencyPerContainer": 200,

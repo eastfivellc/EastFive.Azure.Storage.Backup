@@ -68,6 +68,7 @@ namespace EastFive.Azure.Storage.Backup.Table
                 async sourceTables =>
                 {
                     var stats = await sourceTables
+                        .Where(sourceTable => options.ShouldCopy(sourceTable.Name))
                         .Select(sourceTable => sourceTable.CopyTableAsync(targetClient, options, stopCalled))
                         .WhenAllAsync(options.maxTableConcurrency);
                     return stats

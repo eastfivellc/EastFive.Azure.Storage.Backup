@@ -36,6 +36,7 @@ namespace EastFive.Azure.Storage.Backup.Blob
                 async sourceContainers =>
                 {
                     var stats = await sourceContainers
+                        .Where(sourceContainer => options.ShouldCopy(sourceContainer.Name))
                         .Select(sourceContainer => sourceContainer.CopyContainerAsync(targetClient, options, stopCalled))
                         .WhenAllAsync(options.maxContainerConcurrency);
                     return stats

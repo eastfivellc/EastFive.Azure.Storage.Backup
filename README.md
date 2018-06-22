@@ -45,7 +45,7 @@ Example:
                 "Table",
                 "Blob"
             ],
-            "serviceSettings" = {}, <-- described below
+            "serviceSettings" = {},  /* <-- described below */
             "recurringSchedules": [
                 {
                     "uniqueId": "F2EEBD42-534E-4028-BAC1-7E0558796268",
@@ -73,6 +73,8 @@ Example:
 These options let you customize the table and blob transfers:
 
 Table options
+* `includedTables` - Specific table names to copy or empty to indicate all tables. Default is empty.
+* `excludedTables` - If includedTables is empty (meaning all), then use this to omit certain tables. Default is empty.
 * `maxTableConcurrency` - The max number of tables to copy concurrently.  Higher uses more bandwidth and cpu.  Default is 5.
 * `maxSegmentDownloadConcurrencyPerTable` - The max number of table segments to process at a time.  Each segment is about 1000 rows and higher uses more memory.  Default is 25.
 * `maxRowUploadConcurrencyPerTable` - The max number of rows to insert or replace at a time.  Azure limits this to 100, but you can choose lower if the payload is too large.  Default is 100.
@@ -80,6 +82,8 @@ Table options
 * `copyRetries` - The number of times to retry a copy if there were any failures.  Default is 5.
 
 Blob options
+* `includedContainers` - Specific container names to copy or empty to indicate all containers. Default is empty.
+* `excludedContainers` - If includedContainers is empty (meaning all), then use this to omit certain containers. Default is empty.
 * `accessPeriod` - The time span after which a new container access window is requested. Default is 1 hour.
 * `maxContainerConcurrency` - The max number of containers to copy concurrently.  Higher uses more bandwidth and cpu.  Default is 2.
 * `maxBlobConcurrencyPerContainer` - The max number of blobs on which to initiate a background copy concurrently.  Default is 200.

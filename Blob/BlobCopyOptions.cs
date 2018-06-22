@@ -2,6 +2,7 @@
 using Microsoft.WindowsAzure.Storage.Blob;
 using Microsoft.WindowsAzure.Storage.RetryPolicies;
 using System;
+using System.Linq;
 
 namespace EastFive.Azure.Storage.Backup.Blob
 {
@@ -14,6 +15,10 @@ namespace EastFive.Azure.Storage.Backup.Blob
                 RetryPolicy = new ExponentialRetry(ServiceSettings.defaultBackoff, ServiceSettings.defaultMaxAttempts)
             };
 
+        // can be empty to indicate all containers
+        public string[] includedContainers;
+        // if includedContainers is empty, this can be used to omit certain ones
+        public string[] excludedContainers;
         public TimeSpan accessPeriod;
         public int maxContainerConcurrency;
         public int maxBlobConcurrencyPerContainer;
@@ -21,5 +26,11 @@ namespace EastFive.Azure.Storage.Backup.Blob
         public TimeSpan maxIntervalCheckCopy;
         public TimeSpan maxTotalWaitForCopy;
         public int copyRetries;
+
+        public bool ShouldCopy(string containerName)
+        {
+            return (excludedContainers == null || !excludedContainers.Contains(containerName, StringComparer.OrdinalIgnoreCase)) &&
+                   (includedContainers == null || !includedContainers.Any() || includedContainers.Contains(containerName, StringComparer.OrdinalIgnoreCase));
+        }
     }
 }
